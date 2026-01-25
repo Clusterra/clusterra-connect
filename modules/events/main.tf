@@ -48,6 +48,33 @@ variable "head_node_instance_id" {
   default     = ""
 }
 
+variable "kms_key_arn" {
+  description = "KMS key ARN for encryption (SQS, Lambda env vars). If not provided, uses AWS managed keys."
+  type        = string
+  default     = null
+}
+
+variable "vpc_config" {
+  description = "VPC configuration for Lambda function"
+  type = object({
+    subnet_ids         = list(string)
+    security_group_ids = list(string)
+  })
+  default = null
+}
+
+variable "lambda_reserved_concurrency" {
+  description = "Reserved concurrent executions for Lambda function"
+  type        = number
+  default     = 10
+}
+
+variable "code_signing_config_arn" {
+  description = "Code signing configuration ARN for Lambda"
+  type        = string
+  default     = null
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SQS QUEUE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,6 +84,10 @@ resource "aws_sqs_queue" "events" {
   visibility_timeout_seconds = 60
   message_retention_seconds  = 86400  # 1 day
   receive_wait_time_seconds  = 20     # Long polling
+
+  # CKV_AWS_27: Enable SQS encryption
+  sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
+  kms_master_key_id       = var.kms_key_arn
 
   tags = {
     Name      = "clusterra-events-${var.cluster_name}"
@@ -70,8 +101,27 @@ resource "aws_sqs_queue" "events_dlq" {
   name                      = "clusterra-events-${var.cluster_name}-dlq"
   message_retention_seconds = 604800  # 7 days
 
+  # CKV_AWS_27: Enable SQS encryption
+  sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
+  kms_master_key_id       = var.kms_key_arn
+
   tags = {
     Name      = "clusterra-events-${var.cluster_name}-dlq"
+    ManagedBy = "OpenTOFU"
+  }
+}
+
+# Dead letter queue for Lambda failures
+resource "aws_sqs_queue" "lambda_dlq" {
+  name                      = "clusterra-lambda-${var.cluster_name}-dlq"
+  message_retention_seconds = 604800  # 7 days
+
+  # CKV_AWS_27: Enable SQS encryption
+  sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
+  kms_master_key_id       = var.kms_key_arn
+
+  tags = {
+    Name      = "clusterra-lambda-${var.cluster_name}-dlq"
     ManagedBy = "OpenTOFU"
   }
 }
@@ -197,11 +247,39 @@ resource "aws_lambda_function" "event_shipper" {
 
   role = aws_iam_role.lambda_execution.arn
 
+  # CKV_AWS_115: Reserved concurrent execution limit
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
+
+  # CKV_AWS_272: Code signing configuration (optional)
+  code_signing_config_arn = var.code_signing_config_arn
+
+  # CKV_AWS_173: KMS encryption for environment variables
+  kms_key_arn = var.kms_key_arn
+
   environment {
     variables = {
       CLUSTER_ID        = var.cluster_id
       TENANT_ID         = var.tenant_id
       CLUSTERRA_API_URL = var.clusterra_api_url
+    }
+  }
+
+  # CKV_AWS_116: Dead Letter Queue configuration
+  dead_letter_config {
+    target_arn = aws_sqs_queue.lambda_dlq.arn
+  }
+
+  # CKV_AWS_50: X-Ray tracing
+  tracing_config {
+    mode = "Active"
+  }
+
+  # CKV_AWS_117: VPC configuration (optional)
+  dynamic "vpc_config" {
+    for_each = var.vpc_config != null ? [var.vpc_config] : []
+    content {
+      subnet_ids         = vpc_config.value.subnet_ids
+      security_group_ids = vpc_config.value.security_group_ids
     }
   }
 
@@ -262,14 +340,36 @@ resource "aws_iam_role_policy" "lambda_sqs" {
       {
         Effect = "Allow"
         Action = [
+          "sqs:SendMessage"
+        ]
+        Resource = aws_sqs_queue.lambda_dlq.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
         Resource = "arn:aws:logs:*:*:*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "xray:PutTraceSegments",
+          "xray:PutTelemetryRecords"
+        ]
+        Resource = "*"
       }
     ]
   })
+}
+
+# VPC permissions for Lambda (if VPC config is provided)
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  count      = var.vpc_config != null ? 1 : 0
+  role       = aws_iam_role.lambda_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 # IAM policy for Slurm hooks to send to SQS
