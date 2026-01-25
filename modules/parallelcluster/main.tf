@@ -77,10 +77,7 @@ variable "fsx_storage_capacity" {
   default     = 1200
 }
 
-variable "customer_id" {
-  description = "Clusterra customer ID"
-  type        = string
-}
+
 
 variable "slurm_jwt_secret_name" {
   description = "Name for the Slurm JWT secret in Secrets Manager"
