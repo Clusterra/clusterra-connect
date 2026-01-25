@@ -82,8 +82,8 @@ variable "code_signing_config_arn" {
 resource "aws_sqs_queue" "events" {
   name                       = "clusterra-events-${var.cluster_name}"
   visibility_timeout_seconds = 60
-  message_retention_seconds  = 86400  # 1 day
-  receive_wait_time_seconds  = 20     # Long polling
+  message_retention_seconds  = 86400 # 1 day
+  receive_wait_time_seconds  = 20    # Long polling
 
   # CKV_AWS_27: Enable SQS encryption
   sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
@@ -99,7 +99,7 @@ resource "aws_sqs_queue" "events" {
 # Dead letter queue for failed messages
 resource "aws_sqs_queue" "events_dlq" {
   name                      = "clusterra-events-${var.cluster_name}-dlq"
-  message_retention_seconds = 604800  # 7 days
+  message_retention_seconds = 604800 # 7 days
 
   # CKV_AWS_27: Enable SQS encryption
   sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
@@ -114,7 +114,7 @@ resource "aws_sqs_queue" "events_dlq" {
 # Dead letter queue for Lambda failures
 resource "aws_sqs_queue" "lambda_dlq" {
   name                      = "clusterra-lambda-${var.cluster_name}-dlq"
-  message_retention_seconds = 604800  # 7 days
+  message_retention_seconds = 604800 # 7 days
 
   # CKV_AWS_27: Enable SQS encryption
   sqs_managed_sse_enabled = var.kms_key_arn == null ? true : null
@@ -185,7 +185,7 @@ resource "aws_cloudwatch_event_rule" "asg_events" {
   description = "Capture ASG events for compute nodes"
 
   event_pattern = jsonencode({
-    source      = ["aws.autoscaling"]
+    source = ["aws.autoscaling"]
     detail-type = [
       "EC2 Instance Launch Successful",
       "EC2 Instance Terminate Successful"

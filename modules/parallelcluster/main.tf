@@ -119,7 +119,7 @@ resource "aws_secretsmanager_secret" "slurm_jwt" {
 
   # CKV_AWS_149: Use KMS CMK for encryption
   kms_key_id = var.kms_key_arn
-  
+
   tags = {
     Purpose   = "Clusterra Slurm authentication"
     ManagedBy = "OpenTOFU"
@@ -135,13 +135,13 @@ resource "aws_secretsmanager_secret_version" "slurm_jwt" {
 
 resource "aws_efs_file_system" "shared" {
   count = var.shared_storage_type == "efs" ? 1 : 0
-  
+
   creation_token = "${var.cluster_name}-efs"
   encrypted      = true
 
   # CKV_AWS_184: Use KMS CMK for encryption
   kms_key_id = var.kms_key_arn
-  
+
   tags = {
     Name      = "${var.cluster_name}-shared"
     ManagedBy = "OpenTOFU"
@@ -150,7 +150,7 @@ resource "aws_efs_file_system" "shared" {
 
 resource "aws_efs_mount_target" "shared" {
   count = var.shared_storage_type == "efs" ? 1 : 0
-  
+
   file_system_id  = aws_efs_file_system.shared[0].id
   subnet_id       = var.subnet_id
   security_groups = [aws_security_group.efs[0].id]
@@ -158,11 +158,11 @@ resource "aws_efs_mount_target" "shared" {
 
 resource "aws_security_group" "efs" {
   count = var.shared_storage_type == "efs" ? 1 : 0
-  
+
   name        = "${var.cluster_name}-efs"
   description = "EFS mount target security group for ${var.cluster_name} cluster"
   vpc_id      = var.vpc_id
-  
+
   # CKV_AWS_23: Add descriptions to all rules
   ingress {
     from_port   = 2049
@@ -171,7 +171,7 @@ resource "aws_security_group" "efs" {
     cidr_blocks = [var.vpc_cidr_block]
     description = "Allow NFS traffic from VPC for EFS mount"
   }
-  
+
   # CKV_AWS_382: Restrict egress to specific ports/destinations
   egress {
     from_port   = 2049
@@ -180,7 +180,7 @@ resource "aws_security_group" "efs" {
     cidr_blocks = [var.vpc_cidr_block]
     description = "Allow NFS traffic to VPC for EFS communication"
   }
-  
+
   tags = {
     Name      = "${var.cluster_name}-efs"
     ManagedBy = "OpenTOFU"
@@ -199,14 +199,14 @@ locals {
       }
     }
   ] : []
-  
+
   cluster_config = yamlencode({
     Region = var.region
-    
+
     Image = {
       Os = "alinux2023"
     }
-    
+
     HeadNode = {
       InstanceType = var.head_node_instance_type
       Networking = {
@@ -224,7 +224,7 @@ locals {
       # but AL2023 Support for slurmrestd is native in newer PC versions. 
       # We ensure the Security Group allows it below).
     }
-    
+
     Scheduling = {
       Scheduler = "slurm"
       SlurmSettings = {
@@ -255,7 +255,7 @@ locals {
         }
       ]
     }
-    
+
     SharedStorage = local.efs_storage
   })
 }
