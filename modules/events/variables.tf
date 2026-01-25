@@ -31,3 +31,30 @@ variable "head_node_instance_id" {
   type        = string
   default     = ""
 }
+
+variable "kms_key_arn" {
+  description = "KMS key ARN for encryption (SQS, Lambda env vars). If not provided, uses AWS managed keys."
+  type        = string
+  default     = null
+}
+
+variable "vpc_config" {
+  description = "VPC configuration for Lambda function"
+  type = object({
+    subnet_ids         = list(string)
+    security_group_ids = list(string)
+  })
+  default = null
+}
+
+variable "lambda_reserved_concurrency" {
+  description = "Reserved concurrent executions for Lambda function"
+  type        = number
+  default     = 10
+}
+
+variable "code_signing_config_arn" {
+  description = "Code signing configuration ARN for Lambda"
+  type        = string
+  default     = null
+}
