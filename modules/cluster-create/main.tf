@@ -105,14 +105,18 @@ locals {
       Ssh = {
         KeyName = var.ssh_key_name
       }
+      Iam = {
+        AdditionalIamPolicies = [
+          { Policy = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" },
+          { Policy = "arn:aws:iam::aws:policy/SecretsManagerReadWrite" },
+          { Policy = "arn:aws:iam::aws:policy/AmazonSQSFullAccess" }
+        ]
+      }
       LocalStorage = {
         RootVolume = {
           Size = 50
         }
       }
-      # Enable slurmrestd on port 6830 (CustomActions or PostInstall would normally do this, 
-      # but AL2023 Support for slurmrestd is native in newer PC versions. 
-      # We ensure the Security Group allows it below).
     }
 
     Scheduling = {

@@ -12,6 +12,30 @@ terraform {
   }
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA SOURCES (for head node role lookup)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Get head node instance details
+data "aws_instance" "head_node" {
+  count       = var.head_node_instance_id != "" ? 1 : 0
+  instance_id = var.head_node_instance_id
+}
+
+# Get head node IAM instance profile
+data "aws_iam_instance_profile" "head_node" {
+  count = var.head_node_instance_id != "" && length(data.aws_instance.head_node) > 0 ? 1 : 0
+  name  = element(split("/", data.aws_instance.head_node[0].iam_instance_profile), length(split("/", data.aws_instance.head_node[0].iam_instance_profile)) - 1)
+}
+
+# Attach SQS policy to head node role (required for event hooks)
+resource "aws_iam_role_policy_attachment" "head_node_sqs" {
+  count = length(data.aws_iam_instance_profile.head_node) > 0 ? 1 : 0
+  
+  role       = data.aws_iam_instance_profile.head_node[0].role_name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSQSFullAccess"
+}
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -19,7 +43,7 @@ terraform {
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_sqs_queue" "events" {
-  name                       = "clusterra-events-${var.cluster_name}"
+  name                       = "clusterra-events-${var.cluster_id}"
   visibility_timeout_seconds = 60
   message_retention_seconds  = 86400 # 1 day
   receive_wait_time_seconds  = 20    # Long polling
@@ -29,15 +53,15 @@ resource "aws_sqs_queue" "events" {
   kms_master_key_id       = var.kms_key_arn
 
   tags = {
-    Name      = "clusterra-events-${var.cluster_name}"
+    Name      = "clusterra-events-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
+    ClusterId = var.cluster_id
   }
 }
 
 # Dead letter queue for failed messages
 resource "aws_sqs_queue" "events_dlq" {
-  name                      = "clusterra-events-${var.cluster_name}-dlq"
+  name                      = "clusterra-events-${var.cluster_id}-dlq"
   message_retention_seconds = 604800 # 7 days
 
   # CKV_AWS_27: Enable SQS encryption
@@ -45,14 +69,15 @@ resource "aws_sqs_queue" "events_dlq" {
   kms_master_key_id       = var.kms_key_arn
 
   tags = {
-    Name      = "clusterra-events-${var.cluster_name}-dlq"
+    Name      = "clusterra-events-${var.cluster_id}-dlq"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
 # Dead letter queue for Lambda failures
 resource "aws_sqs_queue" "lambda_dlq" {
-  name                      = "clusterra-lambda-${var.cluster_name}-dlq"
+  name                      = "clusterra-lambda-${var.cluster_id}-dlq"
   message_retention_seconds = 604800 # 7 days
 
   # CKV_AWS_27: Enable SQS encryption
@@ -60,8 +85,9 @@ resource "aws_sqs_queue" "lambda_dlq" {
   kms_master_key_id       = var.kms_key_arn
 
   tags = {
-    Name      = "clusterra-lambda-${var.cluster_name}-dlq"
+    Name      = "clusterra-lambda-${var.cluster_id}-dlq"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
@@ -96,7 +122,7 @@ resource "aws_sqs_queue_policy" "allow_cloudwatch" {
 
 # EC2 instance state changes (head node start/stop)
 resource "aws_cloudwatch_event_rule" "ec2_state" {
-  name        = "clusterra-ec2-state-${var.cluster_name}"
+  name        = "clusterra-ec2-${var.cluster_id}"
   description = "Capture EC2 state changes for head node"
 
   event_pattern = jsonencode({
@@ -108,19 +134,24 @@ resource "aws_cloudwatch_event_rule" "ec2_state" {
   })
 
   tags = {
-    Name      = "clusterra-ec2-state-${var.cluster_name}"
+    Name      = "clusterra-ec2-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
 resource "aws_cloudwatch_event_target" "ec2_to_sqs" {
   rule = aws_cloudwatch_event_rule.ec2_state.name
   arn  = aws_sqs_queue.events.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ASG events (compute node launch/terminate)
 resource "aws_cloudwatch_event_rule" "asg_events" {
-  name        = "clusterra-asg-${var.cluster_name}"
+  name        = "clusterra-asg-${var.cluster_id}"
   description = "Capture ASG events for compute nodes"
 
   event_pattern = jsonencode({
@@ -132,19 +163,24 @@ resource "aws_cloudwatch_event_rule" "asg_events" {
   })
 
   tags = {
-    Name      = "clusterra-asg-${var.cluster_name}"
+    Name      = "clusterra-asg-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
 resource "aws_cloudwatch_event_target" "asg_to_sqs" {
   rule = aws_cloudwatch_event_rule.asg_events.name
   arn  = aws_sqs_queue.events.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Spot interruption warnings
 resource "aws_cloudwatch_event_rule" "spot_interruption" {
-  name        = "clusterra-spot-${var.cluster_name}"
+  name        = "clusterra-spot-${var.cluster_id}"
   description = "Capture spot interruption warnings"
 
   event_pattern = jsonencode({
@@ -153,14 +189,19 @@ resource "aws_cloudwatch_event_rule" "spot_interruption" {
   })
 
   tags = {
-    Name      = "clusterra-spot-${var.cluster_name}"
+    Name      = "clusterra-spot-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
 resource "aws_cloudwatch_event_target" "spot_to_sqs" {
   rule = aws_cloudwatch_event_rule.spot_interruption.name
   arn  = aws_sqs_queue.events.arn
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -174,7 +215,7 @@ data "archive_file" "lambda_zip" {
 }
 
 resource "aws_lambda_function" "event_shipper" {
-  function_name = "clusterra-event-shipper-${var.cluster_name}"
+  function_name = "clusterra-shipper-${var.cluster_id}"
   description   = "Ships cluster events to Clusterra API"
 
   filename         = data.archive_file.lambda_zip.output_path
@@ -234,6 +275,10 @@ resource "aws_lambda_event_source_mapping" "sqs_trigger" {
   function_name                      = aws_lambda_function.event_shipper.arn
   batch_size                         = 10
   maximum_batching_window_in_seconds = 5
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,7 +286,7 @@ resource "aws_lambda_event_source_mapping" "sqs_trigger" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "lambda_execution" {
-  name = "clusterra-lambda-${var.cluster_name}"
+  name = "clusterra-lambda-${var.cluster_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -255,8 +300,9 @@ resource "aws_iam_role" "lambda_execution" {
   })
 
   tags = {
-    Name      = "clusterra-lambda-${var.cluster_name}"
+    Name      = "clusterra-lambda-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 

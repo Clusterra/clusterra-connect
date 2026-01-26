@@ -35,3 +35,13 @@ variable "clusterra_account_id" {
   type        = string
   default     = "306847926740"
 }
+
+variable "clusterra_service_network_id" {
+  description = "Clusterra's VPC Lattice Service Network ID (from Control Plane)"
+  type        = string
+}
+
+variable "cluster_id" {
+  description = "Clusterra cluster ID (8 chars: clusa1b2)"
+  type        = string
+}

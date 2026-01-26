@@ -48,9 +48,9 @@ variable "vpc_config" {
 }
 
 variable "lambda_reserved_concurrency" {
-  description = "Reserved concurrent executions for Lambda function"
+  description = "Reserved concurrent executions for Lambda function. -1 removes the limit."
   type        = number
-  default     = 10
+  default     = -1
 }
 
 variable "code_signing_config_arn" {

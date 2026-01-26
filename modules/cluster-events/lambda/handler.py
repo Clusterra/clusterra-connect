@@ -3,18 +3,28 @@ Clusterra Event Shipper Lambda
 
 Triggered by SQS, batches events and ships to Clusterra API.
 Deployed in CUSTOMER's AWS account via OpenTofu.
+
+Authentication: Uses STS GetCallerIdentity token for AWS account verification.
 """
 
+import base64
 import json
 import os
 import urllib.request
 import urllib.error
 from datetime import datetime
 
+import boto3
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+
 # Configuration from environment
 CLUSTERRA_API_URL = os.environ.get("CLUSTERRA_API_URL", "https://api.clusterra.cloud")
 CLUSTER_ID = os.environ["CLUSTER_ID"]
 TENANT_ID = os.environ["TENANT_ID"]
+
+# Cached STS token (reuse within Lambda execution)
+_sts_token_cache = None
 
 
 def handler(event, context):
@@ -60,7 +70,7 @@ def handler(event, context):
         elif event_type.startswith("cluster."):
             cluster_updates.append(transform_cluster_event(evt))
     
-    # Build batch request
+    # Build batch request (no cluster_id in body - it's in the path now)
     tables = {}
     if job_updates:
         tables["jobs"] = {"update": job_updates}
@@ -69,14 +79,13 @@ def handler(event, context):
     if cluster_updates:
         tables["clusters"] = {"update": cluster_updates}
     
-    payload = {
-        "cluster_id": CLUSTER_ID,
-        "tables": tables
-    }
+    payload = {"tables": tables}
     
-    # Ship to Clusterra API
+    # Ship to Clusterra API with STS token auth
     try:
-        response = call_clusterra_api("/v1/internal/batch", payload)
+        # Path now includes tenant_id and cluster_id
+        path = f"/v1/internal/batch/{TENANT_ID}/{CLUSTER_ID}"
+        response = call_clusterra_api(path, payload)
         print(f"Shipped {len(events)} events: {response}")
         return {"statusCode": 200, "body": json.dumps(response)}
     except Exception as e:
@@ -200,19 +209,50 @@ def transform_cluster_event(evt):
     }
 
 
+def generate_sts_token():
+    """
+    Generate presigned STS GetCallerIdentity token for AWS account verification.
+    Cached for the lifetime of the Lambda execution context.
+    """
+    global _sts_token_cache
+    if _sts_token_cache:
+        return _sts_token_cache
+    
+    session = boto3.Session()
+    region = os.environ.get("AWS_REGION", "us-east-1")
+    url = f"https://sts.{region}.amazonaws.com/"
+    
+    request = AWSRequest(
+        method="POST",
+        url=url,
+        data="Action=GetCallerIdentity&Version=2011-06-15",
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    SigV4Auth(session.get_credentials(), "sts", region).add_auth(request)
+    
+    token_data = {
+        "url": request.url,
+        "headers": dict(request.headers),
+        "body": request.data
+    }
+    
+    _sts_token_cache = base64.b64encode(json.dumps(token_data).encode()).decode()
+    return _sts_token_cache
+
+
 def call_clusterra_api(path, payload):
-    """Call Clusterra API with proper headers."""
+    """Call Clusterra API with STS token authentication."""
     url = f"{CLUSTERRA_API_URL}{path}"
     
     data = json.dumps(payload).encode("utf-8")
+    sts_token = generate_sts_token()
     
     request = urllib.request.Request(
         url,
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Tenant-ID": TENANT_ID,
-            "X-Cluster-ID": CLUSTER_ID,
+            "X-AWS-STS-Token": sts_token,
         },
         method="POST"
     )

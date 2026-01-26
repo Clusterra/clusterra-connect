@@ -105,6 +105,11 @@ variable "head_node_instance_id" {
   default     = ""
 }
 
+variable "clusterra_service_network_id" {
+  description = "Clusterra's VPC Lattice Service Network ID (from Control Plane)"
+  type        = string
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,12 +133,14 @@ module "parallelcluster" {
 module "connectivity" {
   source = "./modules/cluster-connect"
 
-  region                = var.region
-  cluster_name          = var.cluster_name
-  vpc_id                = var.vpc_id
-  subnet_id             = var.subnet_id
-  slurm_api_port        = var.slurm_api_port
-  head_node_instance_id = var.head_node_instance_id
+  region                       = var.region
+  cluster_name                 = var.cluster_name
+  cluster_id                   = var.cluster_id
+  vpc_id                       = var.vpc_id
+  subnet_id                    = var.subnet_id
+  slurm_api_port               = var.slurm_api_port
+  head_node_instance_id        = var.head_node_instance_id
+  clusterra_service_network_id = var.clusterra_service_network_id
 }
 
 module "events" {
@@ -142,11 +149,12 @@ module "events" {
 
   source = "./modules/cluster-events"
 
-  cluster_name      = var.cluster_name
-  cluster_id        = var.cluster_id
-  tenant_id         = var.tenant_id
-  region            = var.region
-  clusterra_api_url = var.clusterra_api_url
+  cluster_name          = var.cluster_name
+  cluster_id            = var.cluster_id
+  tenant_id             = var.tenant_id
+  region                = var.region
+  clusterra_api_url     = var.clusterra_api_url
+  head_node_instance_id = var.head_node_instance_id
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,5 +192,5 @@ output "lattice_service_endpoint" {
 
 output "lattice_service_network_id" {
   description = "VPC Lattice service network ID (shared via RAM with Clusterra)"
-  value       = module.connectivity.lattice_service_network_id
+  value       = var.clusterra_service_network_id
 }

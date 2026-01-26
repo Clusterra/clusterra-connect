@@ -20,6 +20,21 @@ if [ -f /etc/profile.d/slurm.sh ]; then
     source /etc/profile.d/slurm.sh
 fi
 
+# Install http-parser library (required by slurmrestd on AL2023)
+echo "Installing slurmrestd dependencies..."
+# Remove any existing incompatible version
+rpm -e http-parser --nodeps 2>/dev/null || true
+
+# Install Fedora 34 version which provides libhttp_parser.so.2.9.4
+echo "Installing http-parser 2.9.4 from Fedora archives..."
+rpm -ivh https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/34/Everything/x86_64/os/Packages/h/http-parser-2.9.4-4.fc34.x86_64.rpm || echo "Warning: Failed to install http-parser"
+
+# Symlink hack: slurmrestd explicitly looks for .so.2.9
+if [ -f /usr/lib64/libhttp_parser.so.2.9.4 ] && [ ! -f /usr/lib64/libhttp_parser.so.2.9 ]; then
+    echo "Creating symlink for libhttp_parser.so.2.9..."
+    ln -s /usr/lib64/libhttp_parser.so.2.9.4 /usr/lib64/libhttp_parser.so.2.9
+fi
+
 # 1. Generate or retrieve JWT key
 if [ -n "$JWT_SECRET_ARN" ]; then
     echo "Retrieving JWT key from Secrets Manager..."
@@ -60,12 +75,20 @@ echo "Restarting slurmctld..."
 sudo systemctl restart slurmctld || true
 sleep 3
 
-# 5. Create slurmrestd systemd service
+# 5. Create systemd service
 echo "Creating slurmrestd systemd service..."
-sudo tee /etc/systemd/system/slurmrestd.service << EOF
+
+# Detect local IP to avoid IPv6 binding issues with 0.0.0.0
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+echo "Detected local IP: $LOCAL_IP"
+
+# Force kill any lingering manual instances to free up port
+sudo pkill -9 slurmrestd || true
+
+cat << EOF | sudo tee /etc/systemd/system/slurmrestd.service
 [Unit]
 Description=Slurm REST API (Clusterra)
-After=slurmctld.service munge.service
+After=slurmctld.service munge.service network-online.target
 Wants=slurmctld.service
 
 [Service]
@@ -73,7 +96,8 @@ Type=simple
 User=slurmrestd
 Group=slurmrestd
 Environment=SLURM_CONF=$SLURM_CONF
-ExecStart=/opt/slurm/sbin/slurmrestd -a rest_auth/jwt 0.0.0.0:$SLURMRESTD_PORT
+# Using 0.0.0.0 (All IPv4 interfaces) works now and survives IP changes/restarts
+ExecStart=/opt/slurm/sbin/slurmrestd -a rest_auth/jwt -s openapi/slurmctld 0.0.0.0:$SLURMRESTD_PORT
 Restart=always
 RestartSec=5
 
@@ -91,11 +115,14 @@ fi
 sudo chown slurm:slurmrestd "$JWT_KEY_PATH"
 sudo chmod 640 "$JWT_KEY_PATH"
 
-# 8. Enable and start slurmrestd
+# 8. Enable and start service
 echo "Enabling and starting slurmrestd..."
 sudo systemctl daemon-reload
-sudo systemctl enable slurmrestd
-sudo systemctl start slurmrestd || true
+# Disable socket if it was enabled
+sudo systemctl disable --now slurmrestd.socket 2>/dev/null || true
+# Enable service
+sudo systemctl enable slurmrestd.service
+sudo systemctl restart slurmrestd.service
 
 # 9. Verify
 sleep 3

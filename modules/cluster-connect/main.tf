@@ -25,18 +25,10 @@ terraform {
 # ─────────────────────────────────────────────────────────────────────────────
 
 locals {
-  cluster_short_id     = "cust-${substr(sha256(var.cluster_name), 0, 8)}" # Short ID for AWS resources with name limits
   clusterra_account_id = var.clusterra_account_id
 }
 
-# Generate a unique customer ID for resource naming
-resource "random_id" "customer" {
-  byte_length = 4
-}
-
 locals {
-  customer_id = "cust-${random_id.customer.hex}"
-
   # Use provided instance_id or look it up via tags
   target_instance_id = var.head_node_instance_id != "" ? var.head_node_instance_id : (
     length(data.aws_instances.head_node) > 0 && length(data.aws_instances.head_node[0].ids) > 0
@@ -65,13 +57,14 @@ resource "random_password" "slurm_jwt_key" {
 resource "aws_secretsmanager_secret" "slurm_jwt" {
   # checkov:skip=CKV2_AWS_57:Automatic rotation not needed for static JWT
   # checkov:skip=CKV_AWS_149:Default KMS key is sufficient
-  name                    = "clusterra-slurm-jwt-${var.cluster_name}"
+  name                    = "clusterra-jwt-${var.cluster_id}"
   description             = "Slurm JWT HS256 key for Clusterra authentication"
   recovery_window_in_days = 30 # Production-safe: 30-day recovery window
 
   tags = {
     Purpose   = "Clusterra Slurm authentication"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
@@ -104,6 +97,43 @@ data "aws_instance" "head_node" {
   instance_id = local.target_instance_id
 }
 
+# Get head node IAM instance profile
+data "aws_iam_instance_profile" "head_node" {
+  count = local.target_instance_id != null && length(data.aws_instance.head_node) > 0 ? 1 : 0
+  # Instance profile can be just a name or contain a path - extract the name part
+  name  = element(split("/", data.aws_instance.head_node[0].iam_instance_profile), length(split("/", data.aws_instance.head_node[0].iam_instance_profile)) - 1)
+}
+
+# Allow head node role to read JWT secret (required for slurmrestd setup)
+resource "aws_iam_role_policy" "head_node_jwt_access" {
+  count = length(data.aws_iam_instance_profile.head_node) > 0 ? 1 : 0
+  
+  name = "clusterra-jwt-access-${var.cluster_id}"
+  role = data.aws_iam_instance_profile.head_node[0].role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "ReadJWTSecret"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = aws_secretsmanager_secret.slurm_jwt.arn
+      }
+    ]
+  })
+}
+
+# Attach SSM managed policy to head node role (required for SSM commands)
+resource "aws_iam_role_policy_attachment" "head_node_ssm" {
+  count = length(data.aws_iam_instance_profile.head_node) > 0 ? 1 : 0
+  
+  role       = data.aws_iam_instance_profile.head_node[0].role_name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY GROUP
 # ─────────────────────────────────────────────────────────────────────────────
@@ -118,7 +148,7 @@ data "aws_ec2_managed_prefix_list" "vpc_lattice" {
 
 resource "aws_security_group" "lattice_target" {
   # checkov:skip=CKV2_AWS_5:Security group is attached to head node for Lattice access
-  name        = "clusterra-lattice-sg-${var.cluster_name}"
+  name        = "clusterra-sg-${var.cluster_id}"
   description = "Allow slurmrestd traffic from VPC Lattice to head node"
   vpc_id      = var.vpc_id
 
@@ -139,72 +169,54 @@ resource "aws_security_group" "lattice_target" {
   }
 
   tags = {
-    Name      = "clusterra-lattice-sg-${var.cluster_name}"
+    Name      = "clusterra-sg-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
+    ClusterId = var.cluster_id
   }
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VPC LATTICE SERVICE NETWORK
+# VPC LATTICE SERVICE NETWORK (Shared from Clusterra Control Plane)
 # ─────────────────────────────────────────────────────────────────────────────
+# NOTE: Service Network is created and shared by Clusterra Control Plane.
+# Customer only needs to create a Service and associate it with the shared network.
+# The network ID is passed via var.clusterra_service_network_id
 
-resource "aws_vpclattice_service_network" "clusterra" {
-  name      = "clusterra-${local.cluster_short_id}"
-  auth_type = "AWS_IAM"
-
-  tags = {
-    Name      = "clusterra-${local.customer_id}"
-    ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
-  }
-}
-
-# Associate the service network with the VPC
-resource "aws_vpclattice_service_network_vpc_association" "head_node_vpc" {
-  vpc_identifier             = var.vpc_id
-  service_network_identifier = aws_vpclattice_service_network.clusterra.id
-  security_group_ids         = [aws_security_group.lattice_target.id]
-
-  tags = {
-    Name      = "clusterra-vpc-assoc-${var.cluster_name}"
-    ManagedBy = "OpenTOFU"
-  }
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VPC LATTICE SERVICE
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_vpclattice_service" "slurm_api" {
-  name      = "clusterra-slurm-${local.cluster_short_id}"
+  name      = "clusterra-svc-${var.cluster_id}"
   auth_type = "AWS_IAM" # Use IAM for cross-account auth
 
   tags = {
-    Name      = "clusterra-slurm-${local.customer_id}"
+    Name      = "clusterra-svc-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
+    ClusterId = var.cluster_id
   }
 }
 
-# Associate service with service network
-resource "aws_vpclattice_service_network_service_association" "slurm_api" {
-  service_identifier         = aws_vpclattice_service.slurm_api.id
-  service_network_identifier = aws_vpclattice_service_network.clusterra.id
-
-  tags = {
-    Name      = "clusterra-svc-assoc-${var.cluster_name}"
-    ManagedBy = "OpenTOFU"
-  }
-}
+# Associate service with Clusterra's shared service network
+# NOTE: This resource is commented out - association is done by Clusterra backend after RAM share
+# resource "aws_vpclattice_service_network_service_association" "slurm_api" {
+#   service_identifier         = aws_vpclattice_service.slurm_api.id
+#   service_network_identifier = var.clusterra_service_network_id
+#
+#   tags = {
+#     Name      = "clusterra-assoc-${var.cluster_id}"
+#     ManagedBy = "OpenTOFU"
+#   }
+# }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VPC LATTICE TARGET GROUP
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_vpclattice_target_group" "slurm_api" {
-  name = "clusterra-tg-${local.cluster_short_id}"
-  type = "IP"
+  name = "clusterra-tg-${var.cluster_id}"
+  type = "INSTANCE"
 
   config {
     port             = var.slurm_api_port
@@ -227,9 +239,9 @@ resource "aws_vpclattice_target_group" "slurm_api" {
   }
 
   tags = {
-    Name      = "clusterra-tg-${var.cluster_name}"
+    Name      = "clusterra-tg-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
+    ClusterId = var.cluster_id
   }
 }
 
@@ -240,8 +252,12 @@ resource "aws_vpclattice_target_group_attachment" "head_node" {
   target_group_identifier = aws_vpclattice_target_group.slurm_api.id
 
   target {
-    id   = data.aws_instance.head_node[0].private_ip
+    id   = local.target_instance_id
     port = var.slurm_api_port
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -250,7 +266,7 @@ resource "aws_vpclattice_target_group_attachment" "head_node" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_vpclattice_listener" "slurm_api" {
-  name               = "clusterra-listener-${local.cluster_short_id}"
+  name               = "clusterra-ls-${var.cluster_id}"
   protocol           = "HTTPS" # TLS termination at Lattice (recommended for slurmrestd)
   port               = 443
   service_identifier = aws_vpclattice_service.slurm_api.id
@@ -265,8 +281,9 @@ resource "aws_vpclattice_listener" "slurm_api" {
   }
 
   tags = {
-    Name      = "clusterra-listener-${var.cluster_name}"
+    Name      = "clusterra-ls-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
   }
 }
 
@@ -295,31 +312,11 @@ resource "aws_vpclattice_auth_policy" "allow_clusterra" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AWS RAM RESOURCE SHARE (Cross-Account Access)
+# NOTE: RAM Resource Share is no longer needed here.
+# The Service Network is shared FROM Clusterra TO customers (not vice versa).
+# Customer accepts the share implicitly when associating their Service.
 # ─────────────────────────────────────────────────────────────────────────────
 
-resource "aws_ram_resource_share" "clusterra_service_network" {
-  name                      = "clusterra-${var.cluster_name}"
-  allow_external_principals = true # Allow sharing with Clusterra account
-
-  tags = {
-    Name      = "clusterra-ram-${var.cluster_name}"
-    ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
-  }
-}
-
-# Share the service network with Clusterra account
-resource "aws_ram_resource_association" "service_network" {
-  resource_arn       = aws_vpclattice_service_network.clusterra.arn
-  resource_share_arn = aws_ram_resource_share.clusterra_service_network.arn
-}
-
-# Associate Clusterra account as principal
-resource "aws_ram_principal_association" "clusterra" {
-  principal          = local.clusterra_account_id
-  resource_share_arn = aws_ram_resource_share.clusterra_service_network.arn
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # IAM ROLE FOR CLUSTERRA CROSS-ACCOUNT ACCESS
@@ -327,7 +324,7 @@ resource "aws_ram_principal_association" "clusterra" {
 
 resource "aws_iam_role" "clusterra_access" {
   # checkov:skip=CKV_AWS_61:AssumeRole strictly scoped to Clusterra account via Trust Policy
-  name = "clusterra-access-${var.cluster_name}"
+  name = "clusterra-role-${var.cluster_id}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -340,7 +337,7 @@ resource "aws_iam_role" "clusterra_access" {
         Action = "sts:AssumeRole"
         Condition = {
           StringEquals = {
-            "sts:ExternalId" = "clusterra-${var.cluster_name}"
+            "sts:ExternalId" = "clusterra-${var.cluster_id}"
           }
         }
       }
@@ -348,9 +345,9 @@ resource "aws_iam_role" "clusterra_access" {
   })
 
   tags = {
-    Name      = "clusterra-access-${var.cluster_name}"
+    Name      = "clusterra-role-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
-    Cluster   = var.cluster_name
+    ClusterId = var.cluster_id
   }
 }
 
@@ -419,7 +416,8 @@ output "clusterra_onboarding" {
     aws_account_id = data.aws_caller_identity.current.account_id
     # VPC Lattice endpoints (replaces vpc_endpoint_service)
     lattice_service_endpoint   = aws_vpclattice_service.slurm_api.dns_entry[0].domain_name
-    lattice_service_network_id = aws_vpclattice_service_network.clusterra.id
+    lattice_service_arn        = aws_vpclattice_service.slurm_api.arn
+    lattice_service_network_id = var.clusterra_service_network_id
     slurm_port                 = var.slurm_api_port
     slurm_jwt_secret_arn       = aws_secretsmanager_secret.slurm_jwt.arn
     role_arn                   = aws_iam_role.clusterra_access.arn
@@ -433,10 +431,7 @@ output "lattice_service_endpoint" {
   value       = aws_vpclattice_service.slurm_api.dns_entry[0].domain_name
 }
 
-output "lattice_service_network_id" {
-  description = "VPC Lattice service network ID (shared via RAM)"
-  value       = aws_vpclattice_service_network.clusterra.id
-}
+
 
 output "iam_role_arn" {
   description = "IAM Role ARN for Clusterra cross-account access"
@@ -445,13 +440,13 @@ output "iam_role_arn" {
 
 output "external_id" {
   description = "External ID for STS AssumeRole"
-  value       = "clusterra-${var.cluster_name}"
+  value       = "clusterra-${var.cluster_id}"
   sensitive   = true
 }
 
 output "customer_id" {
-  description = "Unique customer ID for this deployment"
-  value       = local.customer_id
+  description = "Unique cluster ID for this deployment"
+  value       = var.cluster_id
 }
 
 # Keep NLB outputs for backwards compatibility (will be null/empty)

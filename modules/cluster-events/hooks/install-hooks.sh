@@ -35,6 +35,7 @@ sudo cp "$SCRIPT_DIR/slurmctld_epilog.sh" "$CLUSTERRA_DIR/"
 sudo chmod +x "$CLUSTERRA_DIR"/*
 
 # 4. Create environment file
+sudo mkdir -p /etc/clusterra
 sudo tee /etc/clusterra/hooks.env > /dev/null <<EOF
 CLUSTERRA_SQS_URL=$SQS_URL
 EOF
