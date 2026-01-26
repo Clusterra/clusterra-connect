@@ -10,6 +10,7 @@ venv/
 .terraform/
 *.tfstate
 *.tfstate.backup
+*.zip
 crash.log
 
 # Secrets & Local Config
@@ -27,3 +28,5 @@ test-event.json
 test-*.sh
 *.yaml.deployed
 *.tfvars.deployed
+modules/cluster-events/lambda/handler.zip
+
