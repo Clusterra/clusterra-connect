@@ -75,11 +75,6 @@ variable "max_count" {
 }
 
 # Connectivity Settings
-variable "slurm_jwt_secret_name" {
-  type    = string
-  default = "clusterra-slurm-jwt-key"
-}
-
 variable "slurm_api_port" {
   type    = number
   default = 6830
@@ -104,6 +99,12 @@ variable "clusterra_api_url" {
   default     = "https://api.clusterra.cloud"
 }
 
+variable "head_node_instance_id" {
+  description = "EC2 instance ID of head node (populated after pcluster create)"
+  type        = string
+  default     = ""
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULES
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ variable "clusterra_api_url" {
 module "parallelcluster" {
   count = var.deploy_new_cluster ? 1 : 0
 
-  source = "./modules/parallelcluster"
+  source = "./modules/cluster-create"
 
   cluster_name            = var.cluster_name
   region                  = var.region
@@ -122,25 +123,24 @@ module "parallelcluster" {
   compute_instance_type   = var.compute_instance_type
   min_count               = var.min_count
   max_count               = var.max_count
-  slurm_jwt_secret_name   = var.slurm_jwt_secret_name
 }
 
 module "connectivity" {
-  source = "./modules/connect"
+  source = "./modules/cluster-connect"
 
   region                = var.region
   cluster_name          = var.cluster_name
   vpc_id                = var.vpc_id
   subnet_id             = var.subnet_id
-  slurm_jwt_secret_name = var.slurm_jwt_secret_name
   slurm_api_port        = var.slurm_api_port
+  head_node_instance_id = var.head_node_instance_id
 }
 
 module "events" {
   # Only deploy if cluster_id and tenant_id are set
   count = var.cluster_id != "" && var.tenant_id != "" ? 1 : 0
 
-  source = "./modules/events"
+  source = "./modules/cluster-events"
 
   cluster_name      = var.cluster_name
   cluster_id        = var.cluster_id

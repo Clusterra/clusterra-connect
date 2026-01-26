@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "stage": "failed",
+  "scenario": "new",
+  "cluster_name": "clusterra-demo-26-jan",
+  "region": "ap-south-1",
+  "vpc_id": "vpc-5f392937",
+  "subnet_id": "subnet-ce4ffeb5",
+  "tenant_id": "ten_b68ffca90322",
+  "cluster_id": "",
+  "pcluster_config_path": "./generated/clusterra-demo-26-jan-config.yaml",
+  "slurm_jwt_secret_arn": "",
+  "head_node_instance_id": "",
+  "vpc_endpoint_dns": "",
+  "iam_role_arn": "",
+  "iam_external_id": "",
+  "created_at": "2026-01-26T07:43:04.085014",
+  "updated_at": "2026-01-26T08:57:31.635615",
+  "error_message": "tofu apply (connectivity) failed"
+}

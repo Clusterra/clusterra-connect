@@ -1,29 +1,47 @@
 # Clusterra Connect
 
-Connect your existing AWS ParallelCluster to Clusterra in 3 simple steps.
+Connect your AWS ParallelCluster to Clusterra for unified HPC management.
 
 ## Prerequisites
 
-- An existing AWS ParallelCluster with slurmrestd enabled (port 6820)
-- A Slurm JWT key stored in AWS Secrets Manager
+- AWS credentials configured
 - [OpenTOFU](https://opentofu.org/) or Terraform installed
+- Python 3.10+ (for interactive installer)
 
 ## Quick Start
 
+### Option 1: Interactive Installer (Recommended)
+
 ```bash
-# 1. Clone or copy this directory
 git clone https://github.com/clusterra/clusterra-connect.git
 cd clusterra-connect
 
-# 2. Configure your variables
+pip install -r requirements.txt
+python install.py
+```
+
+The installer will:
+- Auto-detect your AWS region, VPCs, and subnets
+- Guide you through scenario selection (new cluster vs existing)
+- Generate `terraform.tfvars` with your configuration
+- Run OpenTofu to deploy infrastructure
+- Register your cluster with Clusterra API
+
+### Option 2: Manual Configuration
+
+```bash
+git clone https://github.com/clusterra/clusterra-connect.git
+cd clusterra-connect
+
+# Configure
 cp terraform.tfvars.example terraform.tfvars
 # Edit terraform.tfvars with your cluster details
 
-# 3. Deploy
+# Deploy
 tofu init
 tofu apply
 
-# 4. Copy outputs to Clusterra console
+# Copy outputs to Clusterra console
 tofu output -json clusterra_onboarding
 ```
 
