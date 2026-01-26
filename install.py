@@ -422,25 +422,73 @@ def phase_4_register(cluster_name: str, region: str, tenant_id: str, api_url: st
     url = f"{api_url}/v1/internal/connect/{tenant_id}"
     console.print(f"[cyan]→ POST {url}[/cyan]")
     
+    # 1st Attempt: Register (Triggers API to send RAM invite)
     try:
-        resp = requests.post(
-            url, 
-            json=payload, 
-            headers={"X-AWS-STS-Token": sts_token},
-            timeout=30
-        )
-        if resp.status_code == 201:
-            data = resp.json()
-            console.print(f"[green]✓ Registered! Cluster ID: {cluster_id}[/green]")
-            # Mark as registered so we don't re-register on next run
-            update_tfvars({'registered': 'true'})
-            return True
-        else:
-            console.print(f"[red]❌ Registration failed: {resp.text}[/red]")
-            return False
+        resp = requests.post(url, json=payload, headers={"X-AWS-STS-Token": sts_token}, timeout=30)
+    except requests.exceptions.Timeout:
+        console.print("[yellow]⚠ Request timed out (Expected if RAM share is pending...)[/yellow]")
+        resp = None # Treat as failure to trigger retry
     except Exception as e:
         console.print(f"[red]❌ API Error: {e}[/red]")
         return False
+
+    # Check for success
+    if resp and resp.status_code == 201:
+        console.print(f"[green]✓ Registered! Cluster ID: {cluster_id}[/green]")
+        update_tfvars({'registered': 'true'})
+        return True
+
+    # Check for RAM Invitation & Auto-Accept
+    console.print("[dim]Checking for RAM Resource Share invitation...[/dim]")
+    if accept_ram_invitation(session):
+         # Retry Registration after accepting
+         console.print("[cyan]→ Retrying POST {url} (RAM Accepted)[/cyan]")
+         try:
+            resp = requests.post(url, json=payload, headers={"X-AWS-STS-Token": sts_token}, timeout=60)
+            if resp.status_code == 201:
+                console.print(f"[green]✓ Registered! Cluster ID: {cluster_id}[/green]")
+                update_tfvars({'registered': 'true'})
+                return True
+            else:
+                console.print(f"[red]❌ Registration failed: {resp.text}[/red]")
+                return False
+         except Exception as e:
+            console.print(f"[red]❌ API retry failed: {e}[/red]")
+            return False
+
+    if resp:
+        console.print(f"[red]❌ Registration failed: {resp.text}[/red]")
+    return False
+
+
+def accept_ram_invitation(session: boto3.Session) -> bool:
+    """Check for and accept any pending RAM resource share invitations."""
+    ram = session.client('ram')
+    try:
+        # Get pending invitations
+        resp = ram.get_resource_share_invitations()
+        invites = resp.get('resourceShareInvitations', [])
+        
+        if not invites:
+            return False
+
+        for invite in invites:
+            arn = invite['resourceShareInvitationArn']
+            name = invite['resourceShareName']
+            sender = invite['senderAccountId']
+            
+            console.print(f"[yellow]⚡ Found RAM Invitation for '{name}' from {sender}[/yellow]")
+            console.print(f"[dim]Accepting {arn}...[/dim]")
+            
+            ram.accept_resource_share_invitation(resourceShareInvitationArn=arn)
+            console.print(f"[green]✓ Accepted RAM invitation[/green]")
+            time.sleep(5) # Allow propagation
+            return True
+            
+    except Exception as e:
+        console.print(f"[red]⚠ Error checking RAM invitations: {e}[/red]")
+    
+    return False
 
 
 def generate_sts_token(session: boto3.Session) -> str:

@@ -7,6 +7,10 @@
 # This script MUST exit 0 to avoid blocking job scheduling.
 
 # Run Python hook in background (async, non-blocking)
+if [ -f /etc/clusterra/hooks.env ]; then
+    source /etc/clusterra/hooks.env
+    export CLUSTERRA_SQS_URL
+fi
 (/opt/clusterra/clusterra-hook.py job.allocated &)
 
 # Chain to customer's slurmctld prolog if exists

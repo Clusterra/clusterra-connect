@@ -37,7 +37,11 @@ case "$JOB_STATE" in
 esac
 
 # Run Python hook in background (async, non-blocking)
-(/opt/clusterra/clusterra-hook.py "$EVENT" &)
+if [ -f /etc/clusterra/hooks.env ]; then
+    source /etc/clusterra/hooks.env
+    export CLUSTERRA_SQS_URL
+fi
+(/opt/clusterra/clusterra-hook.py job.ended &)
 
 # Chain to customer's slurmctld epilog if exists
 if [ -x /opt/slurm/etc/customer_slurmctld_epilog.sh ]; then

@@ -146,33 +146,93 @@ data "aws_ec2_managed_prefix_list" "vpc_lattice" {
   }
 }
 
-resource "aws_security_group" "lattice_target" {
-  # checkov:skip=CKV2_AWS_5:Security group is attached to head node for Lattice access
-  name        = "clusterra-sg-${var.cluster_id}"
-  description = "Allow slurmrestd traffic from VPC Lattice to head node"
-  vpc_id      = var.vpc_id
-
-  ingress {
-    from_port       = var.slurm_api_port
-    to_port         = var.slurm_api_port
-    protocol        = "tcp"
-    prefix_list_ids = [data.aws_ec2_managed_prefix_list.vpc_lattice.id]
-    description     = "Allow slurmrestd traffic from VPC Lattice"
+# Find the existing Head Node Security Group created by ParallelCluster
+data "aws_security_group" "head_node" {
+  count = local.target_instance_id != null ? 1 : 0
+  filter {
+    name   = "tag:parallelcluster:cluster-name"
+    values = [var.cluster_name]
   }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = [data.aws_vpc.selected.cidr_block]
-    description = "Allow all outbound to VPC"
+  filter {
+    name   = "tag:aws:cloudformation:logical-id"
+    values = ["HeadNodeSecurityGroup"]
   }
+}
+
+# Inject Ingress Rule for VPC Lattice into the EXISTING Head Node SG
+# resource "aws_security_group_rule" "lattice_ingress" {
+#   count = length(data.aws_security_group.head_node) > 0 ? 1 : 0
+#
+#   type              = "ingress"
+#   from_port         = var.slurm_api_port
+#   to_port           = var.slurm_api_port
+#   protocol          = "tcp"
+#   prefix_list_ids   = [data.aws_ec2_managed_prefix_list.vpc_lattice.id]
+#   security_group_id = data.aws_security_group.head_node[0].id
+#   description       = "Allow slurmrestd traffic from VPC Lattice (Clusterra)"
+# }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SSM CONFIGURATION (JWT Key Setup)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Create SSM Document content
+resource "aws_ssm_document" "setup_slurmrestd" {
+  name          = "clusterra-setup-${var.cluster_id}"
+  document_type = "Command"
+  target_type   = "/aws/ec2/instance"
+
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Configure slurmrestd with JWT for Clusterra"
+    parameters    = {
+      SecretArn = {
+        type        = "String"
+        description = "ARN of the JWT Secret"
+      }
+    }
+    mainSteps = [
+      {
+        action = "aws:runShellScript"
+        name   = "configureSlurmrestd"
+        inputs = {
+          timeoutSeconds = "300"
+          runCommand = [
+            # Embed the script content directly to avoid upload complexity
+            base64decode(base64encode(file("${path.module}/scripts/setup-slurmrestd.sh")))
+          ]
+        }
+      }
+    ]
+  })
 
   tags = {
-    Name      = "clusterra-sg-${var.cluster_id}"
+    Name      = "clusterra-setup-${var.cluster_id}"
     ManagedBy = "OpenTOFU"
     ClusterId = var.cluster_id
   }
+}
+
+# Trigger SSM Association to run the script on the Head Node
+resource "aws_ssm_association" "configure_head_node" {
+  count = local.target_instance_id != null ? 1 : 0
+
+  name = aws_ssm_document.setup_slurmrestd.name
+
+  targets {
+    key    = "InstanceIds"
+    values = [local.target_instance_id]
+  }
+
+  parameters = {
+    SecretArn = aws_secretsmanager_secret.slurm_jwt.arn
+  }
+
+  depends_on = [
+    aws_iam_role_policy.head_node_jwt_access, # Ensure role policy is attached first
+    aws_secretsmanager_secret_version.slurm_jwt
+    # aws_security_group_rule.lattice_ingress
+  ]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -233,7 +293,7 @@ resource "aws_vpclattice_target_group" "slurm_api" {
       healthy_threshold_count   = 2
       unhealthy_threshold_count = 3
       matcher {
-        value = "200"
+        value = "200,401"
       }
     }
   }

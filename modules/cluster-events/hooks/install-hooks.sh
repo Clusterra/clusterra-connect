@@ -56,10 +56,10 @@ if ! grep -q "PrologSlurmctld=" "$SLURM_CONF"; then
     sudo tee -a "$SLURM_CONF" > /dev/null <<EOF
 
 # Clusterra Hooks (added by install-hooks.sh)
-PrologSlurmctld=$CLUSTERRA_DIR/run-hook.sh $CLUSTERRA_DIR/slurmctld_prolog.sh
-EpilogSlurmctld=$CLUSTERRA_DIR/run-hook.sh $CLUSTERRA_DIR/slurmctld_epilog.sh
-Prolog=$CLUSTERRA_DIR/run-hook.sh $CLUSTERRA_DIR/prolog.sh
-Epilog=$CLUSTERRA_DIR/run-hook.sh $CLUSTERRA_DIR/epilog.sh
+PrologSlurmctld=$CLUSTERRA_DIR/slurmctld_prolog.sh
+EpilogSlurmctld=$CLUSTERRA_DIR/slurmctld_epilog.sh
+Prolog=$CLUSTERRA_DIR/prolog.sh
+Epilog=$CLUSTERRA_DIR/epilog.sh
 EOF
 else
     echo "Slurm hooks already configured"
