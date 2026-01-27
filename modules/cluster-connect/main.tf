@@ -258,17 +258,12 @@ resource "aws_vpclattice_service" "slurm_api" {
   }
 }
 
-# Associate service with Clusterra's shared service network
-# NOTE: This resource is commented out - association is done by Clusterra backend after RAM share
-# resource "aws_vpclattice_service_network_service_association" "slurm_api" {
-#   service_identifier         = aws_vpclattice_service.slurm_api.id
-#   service_network_identifier = var.clusterra_service_network_id
-#
-#   tags = {
-#     Name      = "clusterra-assoc-${var.cluster_id}"
-#     ManagedBy = "OpenTOFU"
-#   }
-# }
+# NOTE: Service Network Association is NOT created here.
+# Clusterra API handles this after:
+#   1. Adding customer account to RAM share
+#   2. Customer accepting RAM invitation
+#   3. API calling lattice.create_service_network_service_association()
+# See: POST /v1/internal/connect -> _setup_lattice_cross_account()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # VPC LATTICE TARGET GROUP

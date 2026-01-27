@@ -422,39 +422,39 @@ def phase_4_register(cluster_name: str, region: str, tenant_id: str, api_url: st
     url = f"{api_url}/v1/internal/connect/{tenant_id}"
     console.print(f"[cyan]→ POST {url}[/cyan]")
     
-    # 1st Attempt: Register (Triggers API to send RAM invite)
+    # 1st Attempt: Register cluster (also triggers RAM share principal addition)
     try:
         resp = requests.post(url, json=payload, headers={"X-AWS-STS-Token": sts_token}, timeout=30)
     except requests.exceptions.Timeout:
         console.print("[yellow]⚠ Request timed out (Expected if RAM share is pending...)[/yellow]")
-        resp = None # Treat as failure to trigger retry
+        resp = None
     except Exception as e:
         console.print(f"[red]❌ API Error: {e}[/red]")
         return False
 
-    # Check for success
-    if resp and resp.status_code == 201:
-        console.print(f"[green]✓ Registered! Cluster ID: {cluster_id}[/green]")
-        update_tfvars({'registered': 'true'})
-        return True
+    first_success = resp and resp.status_code == 201
+    if first_success:
+        console.print(f"[green]✓ Cluster registered![/green]")
 
-    # Check for RAM Invitation & Auto-Accept
+    # ALWAYS check for RAM invitation (API adds us as principal, we need to accept)
+    # This enables the Lattice service-to-network association
     console.print("[dim]Checking for RAM Resource Share invitation...[/dim]")
-    if accept_ram_invitation(session):
-         # Retry Registration after accepting
-         console.print("[cyan]→ Retrying POST {url} (RAM Accepted)[/cyan]")
-         try:
+    ram_accepted = accept_ram_invitation(session)
+    
+    if ram_accepted:
+        console.print("[dim]RAM accepted - retrying to complete Lattice association...[/dim]")
+        # 2nd call to complete the Lattice association now that RAM is accepted
+        try:
             resp = requests.post(url, json=payload, headers={"X-AWS-STS-Token": sts_token}, timeout=60)
             if resp.status_code == 201:
-                console.print(f"[green]✓ Registered! Cluster ID: {cluster_id}[/green]")
-                update_tfvars({'registered': 'true'})
-                return True
-            else:
-                console.print(f"[red]❌ Registration failed: {resp.text}[/red]")
-                return False
-         except Exception as e:
-            console.print(f"[red]❌ API retry failed: {e}[/red]")
-            return False
+                console.print(f"[green]✓ Lattice association complete![/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠ Retry failed (association may complete later): {e}[/yellow]")
+
+    if first_success or (resp and resp.status_code == 201):
+        update_tfvars({'registered': 'true'})
+        console.print(f"[green]✓ Registration complete! Cluster ID: {cluster_id}[/green]")
+        return True
 
     if resp:
         console.print(f"[red]❌ Registration failed: {resp.text}[/red]")
