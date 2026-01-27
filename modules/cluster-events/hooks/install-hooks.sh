@@ -50,26 +50,48 @@ exec "$@"
 WRAPPER
 sudo chmod +x "$CLUSTERRA_DIR/run-hook.sh"
 
-# 6. Update slurm.conf
+# 6. Prefix-and-wrap: Backup existing customer hooks before installing wrappers
+#    This preserves customer's prolog.sh/epilog.sh without requiring them to rename.
+SLURM_ETC="/opt/slurm/etc"
+
+echo "Setting up hook wrappers..."
+
+# Backup existing prolog.sh if it exists and isn't already ours
+if [ -f "$SLURM_ETC/prolog.sh" ] && ! grep -q "clusterra" "$SLURM_ETC/prolog.sh"; then
+    echo "Backing up existing prolog.sh to prolog.sh.customer"
+    sudo mv "$SLURM_ETC/prolog.sh" "$SLURM_ETC/prolog.sh.customer"
+fi
+
+# Backup existing epilog.sh if it exists and isn't already ours
+if [ -f "$SLURM_ETC/epilog.sh" ] && ! grep -q "clusterra" "$SLURM_ETC/epilog.sh"; then
+    echo "Backing up existing epilog.sh to epilog.sh.customer"
+    sudo mv "$SLURM_ETC/epilog.sh" "$SLURM_ETC/epilog.sh.customer"
+fi
+
+# Install Clusterra wrappers at standard Slurm locations
+sudo cp "$CLUSTERRA_DIR/prolog.sh" "$SLURM_ETC/prolog.sh"
+sudo cp "$CLUSTERRA_DIR/epilog.sh" "$SLURM_ETC/epilog.sh"
+sudo chmod +x "$SLURM_ETC/prolog.sh" "$SLURM_ETC/epilog.sh"
+
+# 7. Update slurm.conf with slurmctld hooks (only if not already configured)
 if ! grep -q "PrologSlurmctld=" "$SLURM_CONF"; then
-    echo "Updating slurm.conf with Clusterra hooks..."
+    echo "Updating slurm.conf with Clusterra slurmctld hooks..."
     sudo tee -a "$SLURM_CONF" > /dev/null <<EOF
 
 # Clusterra Hooks (added by install-hooks.sh)
 PrologSlurmctld=$CLUSTERRA_DIR/slurmctld_prolog.sh
 EpilogSlurmctld=$CLUSTERRA_DIR/slurmctld_epilog.sh
-Prolog=$CLUSTERRA_DIR/prolog.sh
-Epilog=$CLUSTERRA_DIR/epilog.sh
+# Node-level hooks are at standard locations: /opt/slurm/etc/prolog.sh, epilog.sh
 EOF
 else
     echo "Slurm hooks already configured"
 fi
 
-# 7. Restart slurmctld
+# 8. Restart slurmctld
 echo "Restarting slurmctld..."
 sudo systemctl restart slurmctld || true
 
-# 8. Test SQS access
+# 9. Test SQS access
 echo "Testing SQS access..."
 aws sqs send-message \
     --queue-url "$SQS_URL" \
