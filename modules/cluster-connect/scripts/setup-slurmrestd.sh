@@ -96,6 +96,7 @@ Type=simple
 User=slurmrestd
 Group=slurmrestd
 Environment=SLURM_CONF=$SLURM_CONF
+Environment=SLURM_JWT=$JWT_KEY_PATH
 # Using 0.0.0.0 (All IPv4 interfaces) works now and survives IP changes/restarts
 ExecStart=/opt/slurm/sbin/slurmrestd -a rest_auth/jwt -s openapi/slurmctld 0.0.0.0:$SLURMRESTD_PORT
 Restart=always
