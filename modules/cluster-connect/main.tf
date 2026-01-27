@@ -249,7 +249,7 @@ resource "aws_ssm_association" "configure_head_node" {
 
 resource "aws_vpclattice_service" "slurm_api" {
   name      = "clusterra-svc-${var.cluster_id}"
-  auth_type = "AWS_IAM" # Use IAM for cross-account auth
+  auth_type = "NONE" # Disable IAM auth to allow Authorization header pass-through
 
   tags = {
     Name      = "clusterra-svc-${var.cluster_id}"
