@@ -160,17 +160,17 @@ data "aws_security_group" "head_node" {
 }
 
 # Inject Ingress Rule for VPC Lattice into the EXISTING Head Node SG
-# resource "aws_security_group_rule" "lattice_ingress" {
-#   count = length(data.aws_security_group.head_node) > 0 ? 1 : 0
-#
-#   type              = "ingress"
-#   from_port         = var.slurm_api_port
-#   to_port           = var.slurm_api_port
-#   protocol          = "tcp"
-#   prefix_list_ids   = [data.aws_ec2_managed_prefix_list.vpc_lattice.id]
-#   security_group_id = data.aws_security_group.head_node[0].id
-#   description       = "Allow slurmrestd traffic from VPC Lattice (Clusterra)"
-# }
+resource "aws_security_group_rule" "lattice_ingress" {
+  count = length(data.aws_security_group.head_node) > 0 ? 1 : 0
+
+  type              = "ingress"
+  from_port         = var.slurm_api_port
+  to_port           = var.slurm_api_port
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.vpc_lattice.id]
+  security_group_id = data.aws_security_group.head_node[0].id
+  description       = "Allow slurmrestd traffic from VPC Lattice (Clusterra)"
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SSM CONFIGURATION (JWT Key Setup)
@@ -230,8 +230,8 @@ resource "aws_ssm_association" "configure_head_node" {
 
   depends_on = [
     aws_iam_role_policy.head_node_jwt_access, # Ensure role policy is attached first
-    aws_secretsmanager_secret_version.slurm_jwt
-    # aws_security_group_rule.lattice_ingress
+    aws_secretsmanager_secret_version.slurm_jwt,
+    aws_security_group_rule.lattice_ingress
   ]
 }
 
