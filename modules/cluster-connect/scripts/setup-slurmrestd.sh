@@ -54,7 +54,7 @@ else
 fi
 
 # 2. Write JWT key to file
-echo "$JWT_KEY" | sudo tee "$JWT_KEY_PATH" > /dev/null
+printf "%s" "$JWT_KEY" | sudo tee "$JWT_KEY_PATH" > /dev/null
 sudo chmod 600 "$JWT_KEY_PATH"
 sudo chown slurm:slurm "$JWT_KEY_PATH"
 echo "JWT key written to $JWT_KEY_PATH"
