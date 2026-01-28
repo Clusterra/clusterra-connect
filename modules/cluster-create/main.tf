@@ -193,7 +193,7 @@ locals {
   queue_networking = {
     SubnetIds = [var.subnet_id]
   }
-  
+
   common_iam = [
     { Policy = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" },
     { Policy = "arn:aws:iam::aws:policy/SecretsManagerReadWrite" }, # Needed for DB password
@@ -274,7 +274,7 @@ locals {
             }
           ]
           CapacityType = "SPOT"
-           Networking   = { SubnetIds = [var.subnet_id] }
+          Networking   = { SubnetIds = [var.subnet_id] }
         },
         # 3. Memory Queue (EDA)
         {
@@ -294,9 +294,9 @@ locals {
             }
           ]
           CapacityType = "SPOT"
-           Networking   = { SubnetIds = [var.subnet_id] }
+          Networking   = { SubnetIds = [var.subnet_id] }
         },
-         # 4. On-Demand Queue (Critical Workloads)
+        # 4. On-Demand Queue (Critical Workloads)
         {
           Name = "ondemand"
           ComputeResources = [
@@ -320,7 +320,7 @@ locals {
             }
           ]
           CapacityType = "ONDEMAND"
-           Networking   = { SubnetIds = [var.subnet_id] }
+          Networking   = { SubnetIds = [var.subnet_id] }
         }
       ]
     }
