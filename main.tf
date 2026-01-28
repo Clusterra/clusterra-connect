@@ -43,11 +43,16 @@ variable "subnet_id" {
   type        = string
 }
 
+variable "secondary_subnet_id" {
+  description = "Secondary Subnet ID (different AZ)"
+  type        = string
+}
+
 # New Cluster Settings (Optional)
 variable "head_node_instance_type" {
   description = "Head node instance type (for new clusters)"
   type        = string
-  default     = "t3.small"
+  default     = "t3.medium"
 }
 
 variable "compute_instance_type" {
@@ -128,6 +133,7 @@ module "parallelcluster" {
   compute_instance_type   = var.compute_instance_type
   min_count               = var.min_count
   max_count               = var.max_count
+  secondary_subnet_id     = var.secondary_subnet_id
 }
 
 module "connectivity" {

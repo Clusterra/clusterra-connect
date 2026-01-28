@@ -459,34 +459,47 @@ def phase_4_register(cluster_name: str, region: str, tenant_id: str, api_url: st
     return True
 
 
+CLUSTERRA_SERVICE_NETWORK_NAME = "clusterra-service-network"
+
 def accept_ram_invitation(session: boto3.Session) -> bool:
-    """Check for and accept any pending RAM resource share invitations."""
+    """Check for and accept the Clusterra service network RAM invitation.
+    
+    Returns True if the invitation is accepted OR already accepted (can proceed).
+    Returns False if no invitation found yet (caller should retry).
+    """
     ram = session.client('ram')
     try:
-        # Get pending invitations
         resp = ram.get_resource_share_invitations()
         invites = resp.get('resourceShareInvitations', [])
         
-        if not invites:
-            return False
-
+        # Find our specific service network invitation
         for invite in invites:
+            name = invite.get('resourceShareName', '')
+            if CLUSTERRA_SERVICE_NETWORK_NAME not in name:
+                continue  # Not our invitation
+            
+            status = invite.get('status')
             arn = invite['resourceShareInvitationArn']
-            name = invite['resourceShareName']
             sender = invite['senderAccountId']
             
-            console.print(f"[yellow]⚡ Found RAM Invitation for '{name}' from {sender}[/yellow]")
-            console.print(f"[dim]Accepting {arn}...[/dim]")
+            if status == 'ACCEPTED':
+                console.print(f"[green]✓ RAM invitation for '{name}' already accepted[/green]")
+                return True
             
-            ram.accept_resource_share_invitation(resourceShareInvitationArn=arn)
-            console.print(f"[green]✓ Accepted RAM invitation[/green]")
-            time.sleep(5) # Allow propagation
-            return True
+            if status == 'PENDING':
+                console.print(f"[yellow]⚡ Found RAM Invitation for '{name}' from {sender}[/yellow]")
+                console.print(f"[dim]Accepting {arn}...[/dim]")
+                ram.accept_resource_share_invitation(resourceShareInvitationArn=arn)
+                console.print(f"[green]✓ Accepted RAM invitation[/green]")
+                time.sleep(5)  # Allow propagation
+                return True
+        
+        # No matching invitation found
+        return False
             
     except Exception as e:
         console.print(f"[red]⚠ Error checking RAM invitations: {e}[/red]")
-    
-    return False
+        return False
 
 
 def wait_for_ram_acceptance(session: boto3.Session, timeout: int = 300) -> bool:
@@ -834,15 +847,33 @@ def gather_inputs(session: boto3.Session):
     if region != session.region_name:
         session = boto3.Session(region_name=region)
 
-    # 3. Cluster Name
-    default_name = existing_vars.get('cluster_name', 'clusterra-demo')
-    cluster_name = questionary.text("Cluster Name:", default=default_name, style=PROMPT_STYLE, validate=validate_required).ask()
+    # 3. Cluster Name, ID, & Tenant ID (Hoisted)
+    
+    # Generate cluster_id early if needed
+    if scenario in ["new", "existing"]:
+        import uuid
+        # Check if we have one already
+        existing_cid = existing_vars.get('cluster_id')
+        if existing_cid:
+            cluster_id = existing_cid
+        else:
+            cluster_id = f"clus{uuid.uuid4().hex[:4]}"
+            console.print(f"[cyan]Generated cluster ID: {cluster_id}[/cyan]")
+    else:
+        # Update scenario handled above
+        pass
+
+    # Default name with suffix
+    default_base = existing_vars.get('cluster_name', f'clusterra-{cluster_id}' if 'cluster_id' in locals() else 'clusterra')
+    
+    cluster_name = questionary.text("Cluster Name:", default=default_base, style=PROMPT_STYLE, validate=validate_required).ask()
     if cluster_name is None: sys.exit(0)
 
     # 4. Scenario Specifics
     vpc_id = ""
     subnet_id = ""
     head_node_id = ""
+    secondary_subnet_id = existing_vars.get('secondary_subnet_id', '')  # May not be needed for existing clusters
     
     if scenario == "existing":
         # Ask for Head Node ID to auto-detect VPC/Subnet
@@ -904,15 +935,30 @@ def gather_inputs(session: boto3.Session):
         subnet_id = questionary.select("Select Subnet (Public for Head Node):", choices=subnet_choices, default=default_subnet, style=PROMPT_STYLE).ask()
         if subnet_id is None: sys.exit(0)
 
-    # 5. Common Params
+        # Secondary Subnet Selection (for Aurora - Different AZ)
+        selected_az = next((s['az'] for s in subnets if s['id'] == subnet_id), None)
+        secondary_subnets = [s for s in subnets if s['az'] != selected_az]
+        
+        if not secondary_subnets:
+             console.print(f"[red]❌ No subnets found in a different AZ than {selected_az}. Aurora requires at least 2 AZs.[/red]")
+             sys.exit(1)
+
+        secondary_choices = [questionary.Choice(f"{s['id']} ({s['name']} - {s['az']})", value=s['id']) for s in secondary_subnets]
+        default_secondary = existing_vars.get('secondary_subnet_id')
+        if default_secondary and not any(c.value == default_secondary for c in secondary_choices):
+             default_secondary = None
+
+        secondary_subnet_id = questionary.select(
+            "Select Secondary Subnet (Different AZ for Aurora):", 
+            choices=secondary_choices, 
+            default=default_secondary, 
+            style=PROMPT_STYLE
+        ).ask()
+        if secondary_subnet_id is None: sys.exit(0)
+
+    console.print("[dim]Hint: Find your Tenant ID in the URL: https://console.clusterra.cloud/manage/[tenant_id] AND click 'Connect Cluster'.[/dim]")
     tenant_id = questionary.text("Tenant ID (ten_...):", default=existing_vars.get('tenant_id', ''), style=PROMPT_STYLE, validate=validate_required).ask()
     if tenant_id is None: sys.exit(0)
-    
-    # Generate cluster_id for new/existing scenarios
-    if scenario in ["new", "existing"]:
-        import uuid
-        cluster_id = f"clus{uuid.uuid4().hex[:4]}"
-        console.print(f"[cyan]Generated cluster ID: {cluster_id}[/cyan]")
     
     # Ensure generated dir exists
     Path("generated").mkdir(exist_ok=True)
@@ -923,6 +969,7 @@ def gather_inputs(session: boto3.Session):
         f.write(f'cluster_name = "{cluster_name}"\n')
         f.write(f'vpc_id = "{vpc_id}"\n')
         f.write(f'subnet_id = "{subnet_id}"\n')
+        f.write(f'secondary_subnet_id = "{secondary_subnet_id}"\n')
         f.write(f'tenant_id = "{tenant_id}"\n')
         f.write(f'cluster_id = "{cluster_id}"\n')
         

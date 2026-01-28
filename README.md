@@ -4,78 +4,74 @@ Connect your AWS ParallelCluster to Clusterra for unified HPC management.
 
 ## Prerequisites
 
-- AWS credentials configured
-- [OpenTOFU](https://opentofu.org/) or Terraform installed
-- Python 3.10+ (for interactive installer)
+- **Python 3.10+**
+- **AWS CLI** configured (`aws configure`)
+- **[OpenTofu](https://opentofu.org/)** (`tofu`) or Terraform
+- **AWS ParallelCluster** (`pcluster`) installed via pip
 
-## Quick Start
+## Quick Start (Recommended)
 
-### Option 1: Interactive Installer (Recommended)
+The easiest way to connect is using our interactive installer, which handles infrastructure deployment and API registration automatically.
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/clusterra/clusterra-connect.git
 cd clusterra-connect
 
+# 2. Install dependencies
 pip install -r requirements.txt
-python install.py
+
+# 3. Run the installer
+python3 install.py
 ```
 
-The installer will:
-- Auto-detect your AWS region, VPCs, and subnets
-- Guide you through scenario selection (new cluster vs existing)
-- Generate `terraform.tfvars` with your configuration
-- Run OpenTofu to deploy infrastructure
-- Register your cluster with Clusterra API
+### What the Installer Does
 
-### Option 2: Manual Configuration
+1.  **Configuration**: Interactive prompts to select your Region, VPC, and Subnets (supports both new cluster creation and existing clusters).
+2.  **Infrastructure**: Uses OpenTofu to deploy a **VPC Lattice** service association, enabling secure communication between your cluster and Clusterra.
+3.  **Registration**: Automatically registers your cluster with the Clusterra API using your Tenant ID.
 
+### Connecting an Existing Cluster
+
+If you already have a running ParallelCluster:
+1.  Select **"Existing Cluster"** in the installer.
+2.  Provide the **Head Node Instance ID** (e.g., `i-0123456789abcdef0`).
+3.  The installer will inspect the instance to identify the correct VPC and Subnet, then deploy the necessary connectivity layer.
+
+## Architecture
+
+Clusterra Connect uses **AWS VPC Lattice** for secure, private connectivity without exposing your cluster to the public internet.
+
+- **Private**: No public IPs required for API communication.
+- **Secure**: Cross-account access is strictly controlled via IAM and Lattice Service Network policies.
+- **Automated**: The installer handles the Lattice Service association and RAM resource share acceptance.
+
+## Troubleshooting
+
+### "Authentication Failed"
+Ensure your AWS CLI is configured for the correct account and region:
 ```bash
-git clone https://github.com/clusterra/clusterra-connect.git
-cd clusterra-connect
+aws sts get-caller-identity
+```
 
-# Configure
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your cluster details
-
-# Deploy
+### "ToFu/Terraform Error"
+If the installer fails during the infrastructure phase, you can inspect the logs or try running Tofu manually for more details:
+```bash
 tofu init
-tofu apply
-
-# Copy outputs to Clusterra console
-tofu output -json clusterra_onboarding
+tofu apply -var-file=generated/terraform.tfvars
 ```
 
-## What This Creates
+### "RAM Invitation Pending"
+The installer waits for the RAM Resource Share invitation from Clusterra. If it times out, you can check for pending invitations in the [AWS RAM Console](https://console.aws.amazon.com/ram/home#ResourceShareInvitations:).
 
-| Resource | Purpose |
-|----------|---------|
-| **IAM Role** | Allows Clusterra to fetch your Slurm JWT secret |
-| **NLB** | Routes traffic to your head node's Slurm API |
-| **VPC Endpoint Service** | Exposes NLB via PrivateLink (no public access) |
+## Clean Up
 
-## Security
-
-- ✅ No public exposure - uses AWS PrivateLink
-- ✅ Cross-account access requires ExternalId verification
-- ✅ Clusterra only has read access to your JWT secret
-- ✅ All traffic stays on AWS backbone network
-
-## Outputs
-
-After `tofu apply`, you'll get these values to enter in Clusterra console:
-
-```
-aws_account_id       = "123456789012"
-role_arn             = "arn:aws:iam::123456789012:role/clusterra-access-cust-abc123"
-external_id          = "clusterra-cust-abc123"
-vpc_endpoint_service = "com.amazonaws.vpce.ap-south-1.vpce-svc-xxx"
-slurm_jwt_secret_arn = "arn:aws:secretsmanager:ap-south-1:123456789012:secret:slurm-jwt-key"
-```
-
-## Cleanup
-
-To disconnect from Clusterra:
+To remove all resources and disconnect the cluster:
 
 ```bash
-tofu destroy
+# Destroy cloud resources
+tofu destroy -var-file=generated/terraform.tfvars
+
+# If you created a new cluster via the installer, also delete it:
+pcluster delete-cluster --cluster-name <your-cluster-name> --region <region>
 ```
