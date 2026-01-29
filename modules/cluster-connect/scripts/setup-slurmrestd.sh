@@ -86,6 +86,22 @@ echo "Restarting slurmctld..."
 sudo systemctl restart slurmctld || true
 sleep 3
 
+# 4b. Update slurmdbd.conf with JWT authentication (Fixes 502 TRES error)
+SLURMDBD_CONF="/opt/slurm/etc/slurmdbd.conf"
+if ! grep -q "AuthAltTypes=auth/jwt" "$SLURMDBD_CONF"; then
+    echo "Adding JWT authentication to slurmdbd.conf..."
+    sudo tee -a "$SLURMDBD_CONF" << EOF
+
+# JWT Authentication (added by Clusterra)
+AuthAltTypes=auth/jwt
+AuthAltParameters=jwt_key=$JWT_KEY_PATH
+EOF
+    
+    echo "Restarting slurmdbd..."
+    sudo systemctl restart slurmdbd || true
+    sleep 3
+fi
+
 # 5. Create systemd service
 echo "Creating slurmrestd systemd service..."
 
