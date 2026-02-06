@@ -142,6 +142,7 @@ module "connectivity" {
   region                       = var.region
   cluster_name                 = var.cluster_name
   cluster_id                   = var.cluster_id
+  tenant_id                    = var.tenant_id
   vpc_id                       = var.vpc_id
   subnet_id                    = var.subnet_id
   slurm_api_port               = var.slurm_api_port
