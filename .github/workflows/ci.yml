@@ -10,6 +10,9 @@ env:
   TOFU_VERSION: "1.6.0"
   PYTHON_VERSION: "3.11"
 
+permissions:
+  contents: write
+
 jobs:
   validate-terraform:
     name: Validate Terraform
