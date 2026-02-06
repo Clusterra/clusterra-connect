@@ -533,7 +533,7 @@ resource "aws_cloudwatch_event_rule" "node_events" {
   description = "Capture EC2 and ASG events for Clusterra"
 
   event_pattern = jsonencode({
-    source      = ["aws.ec2", "aws.autoscaling"]
+    source = ["aws.ec2", "aws.autoscaling"]
     detail-type = [
       "EC2 Instance State-change Notification",
       "EC2 Instance Launch Successful",

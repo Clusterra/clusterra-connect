@@ -175,7 +175,7 @@ resource "aws_rds_cluster" "slurm_db" {
   storage_encrypted                   = true
   iam_database_authentication_enabled = true
   copy_tags_to_snapshot               = true
-  backtrack_window                    = 3600 # 1 hour
+  backtrack_window                    = 3600  # 1 hour
   deletion_protection                 = false # For easy teardown in this module
   # checkov:skip=CKV_AWS_139:Deletion protection disabled for dev/demo clusters
 
@@ -200,10 +200,10 @@ resource "aws_rds_cluster" "slurm_db" {
 }
 
 resource "aws_rds_cluster_instance" "slurm_db_instance" {
-  cluster_identifier   = aws_rds_cluster.slurm_db.id
-  instance_class       = "db.serverless"
-  engine               = aws_rds_cluster.slurm_db.engine
-  engine_version       = aws_rds_cluster.slurm_db.engine_version
+  cluster_identifier         = aws_rds_cluster.slurm_db.id
+  instance_class             = "db.serverless"
+  engine                     = aws_rds_cluster.slurm_db.engine
+  engine_version             = aws_rds_cluster.slurm_db.engine_version
   auto_minor_version_upgrade = true
 
   # Performance monitoring (free tier: 7 days retention)
