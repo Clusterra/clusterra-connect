@@ -139,7 +139,7 @@ resource "aws_security_group" "aurora" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
+  # checkov:skip=CKV_AWS_382:Database needs outbound for S3 imports and AWS API calls
 }
 
 # Get subnet details to check AZs
@@ -177,6 +177,7 @@ resource "aws_rds_cluster" "slurm_db" {
   copy_tags_to_snapshot               = true
   backtrack_window                    = 3600 # 1 hour
   deletion_protection                 = false # For easy teardown in this module
+  # checkov:skip=CKV_AWS_139:Deletion protection disabled for dev/demo clusters
 
   # Logging
   enabled_cloudwatch_logs_exports = ["audit", "error", "general", "slowquery"]
@@ -198,10 +199,17 @@ resource "aws_rds_cluster" "slurm_db" {
 }
 
 resource "aws_rds_cluster_instance" "slurm_db_instance" {
-  cluster_identifier = aws_rds_cluster.slurm_db.id
-  instance_class     = "db.serverless"
-  engine             = aws_rds_cluster.slurm_db.engine
-  engine_version     = aws_rds_cluster.slurm_db.engine_version
+  cluster_identifier   = aws_rds_cluster.slurm_db.id
+  instance_class       = "db.serverless"
+  engine               = aws_rds_cluster.slurm_db.engine
+  engine_version       = aws_rds_cluster.slurm_db.engine_version
+  auto_minor_version_upgrade = true
+
+  # Performance monitoring (free tier: 7 days retention)
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
+
+  # checkov:skip=CKV_AWS_118:Enhanced monitoring has extra cost, using Performance Insights instead
 }
 
 
