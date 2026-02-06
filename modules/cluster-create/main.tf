@@ -108,7 +108,7 @@ resource "aws_secretsmanager_secret" "slurm_db_password" {
   description             = "Password for Slurm accounting database user"
   recovery_window_in_days = 0 # Immediate deletion for demo/dev
   # checkov:skip=CKV_AWS_149:Default KMS key is sufficient for this module
-
+  # checkov:skip=CKV2_AWS_57:Rotation not needed for ephemeral demo clusters
 }
 
 resource "aws_secretsmanager_secret_version" "slurm_db_password" {
@@ -196,6 +196,7 @@ resource "aws_rds_cluster" "slurm_db" {
       availability_zones # Ignore AZ changes to prevent recreation
     ]
   }
+  # checkov:skip=CKV2_AWS_8:AWS Backup not needed for ephemeral demo clusters
 }
 
 resource "aws_rds_cluster_instance" "slurm_db_instance" {
@@ -210,6 +211,7 @@ resource "aws_rds_cluster_instance" "slurm_db_instance" {
   performance_insights_retention_period = 7
 
   # checkov:skip=CKV_AWS_118:Enhanced monitoring has extra cost, using Performance Insights instead
+  # checkov:skip=CKV_AWS_354:Default KMS key is sufficient for demo clusters
 }
 
 
