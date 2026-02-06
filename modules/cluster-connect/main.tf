@@ -499,8 +499,122 @@ resource "aws_iam_role_policy" "ssm_access" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# EVENTBRIDGE API DESTINATION (Node Events → Clusterra API via Lattice)
+# Replaces the old cluster-events module SQS + Lambda architecture
+# ─────────────────────────────────────────────────────────────────────────────
+
+# EventBridge Connection (authentication for API Destination)
+resource "aws_cloudwatch_event_connection" "clusterra" {
+  name               = "clusterra-events-${var.cluster_id}"
+  description        = "Connection to Clusterra API for node events"
+  authorization_type = "API_KEY"
+
+  auth_parameters {
+    api_key {
+      key   = "X-Cluster-ID"
+      value = var.cluster_id
+    }
+  }
+}
+
+# EventBridge API Destination (targets Clusterra API via Lattice)
+resource "aws_cloudwatch_event_api_destination" "clusterra" {
+  name                             = "clusterra-events-${var.cluster_id}"
+  description                      = "Send node events to Clusterra API"
+  invocation_endpoint              = "https://${var.clusterra_api_endpoint}/v1/internal/events"
+  http_method                      = "POST"
+  invocation_rate_limit_per_second = 100
+  connection_arn                   = aws_cloudwatch_event_connection.clusterra.arn
+}
+
+# CloudWatch Rule for EC2/ASG events
+resource "aws_cloudwatch_event_rule" "node_events" {
+  name        = "clusterra-node-events-${var.cluster_id}"
+  description = "Capture EC2 and ASG events for Clusterra"
+
+  event_pattern = jsonencode({
+    source      = ["aws.ec2", "aws.autoscaling"]
+    detail-type = [
+      "EC2 Instance State-change Notification",
+      "EC2 Instance Launch Successful",
+      "EC2 Instance Terminate Successful",
+      "EC2 Spot Instance Interruption Warning"
+    ]
+  })
+
+  tags = {
+    Name      = "clusterra-node-events-${var.cluster_id}"
+    ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
+  }
+}
+
+# Target: Send events to API Destination
+resource "aws_cloudwatch_event_target" "to_clusterra" {
+  rule = aws_cloudwatch_event_rule.node_events.name
+  arn  = aws_cloudwatch_event_api_destination.clusterra.arn
+
+  role_arn = aws_iam_role.eventbridge.arn
+
+  # Include cluster metadata in the event
+  input_transformer {
+    input_paths = {
+      detail      = "$.detail"
+      detail_type = "$.detail-type"
+      source      = "$.source"
+      time        = "$.time"
+    }
+    input_template = <<EOF
+{
+  "cluster_id": "${var.cluster_id}",
+  "tenant_id": "${var.tenant_id}",
+  "source": <source>,
+  "detail_type": <detail_type>,
+  "time": <time>,
+  "detail": <detail>
+}
+EOF
+  }
+}
+
+# IAM Role for EventBridge to invoke API Destination
+resource "aws_iam_role" "eventbridge" {
+  name = "clusterra-eventbridge-${var.cluster_id}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Name      = "clusterra-eventbridge-${var.cluster_id}"
+    ManagedBy = "OpenTOFU"
+    ClusterId = var.cluster_id
+  }
+}
+
+resource "aws_iam_role_policy" "eventbridge_invoke" {
+  name = "invoke-api-destination"
+  role = aws_iam_role.eventbridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["events:InvokeApiDestination"]
+      Resource = aws_cloudwatch_event_api_destination.clusterra.arn
+    }]
+  })
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # OUTPUTS - Values for Clusterra API registration
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 output "clusterra_onboarding" {
   description = "Copy ALL of these values to Clusterra console or use for API registration"

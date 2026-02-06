@@ -4,28 +4,35 @@
 # Install Clusterra hooks on ParallelCluster head node
 # Run this on the head node after cluster creation
 #
-# Usage: install-hooks.sh <sqs_queue_url>
+# Usage: install-hooks.sh <api_url> <cluster_id> <tenant_id>
+#
+# v2: Uses curl fire-and-forget instead of SQS + Lambda
 
 set -e
 
-SQS_URL="${1:-}"
+API_URL="${1:-}"
+CLUSTER_ID="${2:-}"
+TENANT_ID="${3:-}"
 
-if [ -z "$SQS_URL" ]; then
-    echo "Usage: install-hooks.sh <sqs_queue_url>"
+if [ -z "$API_URL" ] || [ -z "$CLUSTER_ID" ]; then
+    echo "Usage: install-hooks.sh <api_url> <cluster_id> [tenant_id]"
+    echo "  api_url:    Clusterra API URL (e.g., https://api.clusterra.cloud)"
+    echo "  cluster_id: Your Clusterra cluster ID (e.g., clusa1b2)"
+    echo "  tenant_id:  Your Clusterra tenant ID (optional)"
     exit 1
 fi
 
 CLUSTERRA_DIR="/opt/clusterra"
 SLURM_CONF="/opt/slurm/etc/slurm.conf"
 
-echo "=== Installing Clusterra Hooks ==="
+echo "=== Installing Clusterra Hooks (v2 - curl) ==="
 
 # 1. Create directory
 sudo mkdir -p "$CLUSTERRA_DIR"
 
 # 2. Copy hook scripts (assuming they're in same dir as this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sudo cp "$SCRIPT_DIR/clusterra-hook.py" "$CLUSTERRA_DIR/"
+sudo cp "$SCRIPT_DIR/clusterra-hook.sh" "$CLUSTERRA_DIR/"
 sudo cp "$SCRIPT_DIR/prolog.sh" "$CLUSTERRA_DIR/"
 sudo cp "$SCRIPT_DIR/epilog.sh" "$CLUSTERRA_DIR/"
 sudo cp "$SCRIPT_DIR/slurmctld_prolog.sh" "$CLUSTERRA_DIR/"
@@ -34,10 +41,13 @@ sudo cp "$SCRIPT_DIR/slurmctld_epilog.sh" "$CLUSTERRA_DIR/"
 # 3. Make executable
 sudo chmod +x "$CLUSTERRA_DIR"/*
 
-# 4. Create environment file
+# 4. Create environment file (now with API_URL instead of SQS)
 sudo mkdir -p /etc/clusterra
 sudo tee /etc/clusterra/hooks.env > /dev/null <<EOF
-CLUSTERRA_SQS_URL=$SQS_URL
+# Clusterra Hook Configuration (v2)
+CLUSTERRA_API_URL=$API_URL
+CLUSTER_ID=$CLUSTER_ID
+TENANT_ID=$TENANT_ID
 EOF
 sudo chmod 600 /etc/clusterra/hooks.env
 
@@ -45,7 +55,7 @@ sudo chmod 600 /etc/clusterra/hooks.env
 sudo tee "$CLUSTERRA_DIR/run-hook.sh" > /dev/null <<'WRAPPER'
 #!/bin/bash
 source /etc/clusterra/hooks.env
-export CLUSTERRA_SQS_URL
+export CLUSTERRA_API_URL CLUSTER_ID TENANT_ID
 exec "$@"
 WRAPPER
 sudo chmod +x "$CLUSTERRA_DIR/run-hook.sh"
@@ -78,7 +88,7 @@ if ! grep -q "PrologSlurmctld=" "$SLURM_CONF"; then
     echo "Updating slurm.conf with Clusterra slurmctld hooks..."
     sudo tee -a "$SLURM_CONF" > /dev/null <<EOF
 
-# Clusterra Hooks (added by install-hooks.sh)
+# Clusterra Hooks (added by install-hooks.sh v2)
 PrologSlurmctld=$CLUSTERRA_DIR/slurmctld_prolog.sh
 EpilogSlurmctld=$CLUSTERRA_DIR/slurmctld_epilog.sh
 # Node-level hooks are at standard locations: /opt/slurm/etc/prolog.sh, epilog.sh
@@ -91,13 +101,19 @@ fi
 echo "Restarting slurmctld..."
 sudo systemctl restart slurmctld || true
 
-# 9. Test SQS access
-echo "Testing SQS access..."
-aws sqs send-message \
-    --queue-url "$SQS_URL" \
-    --message-body '{"event":"test.install","ts":"'$(date -Iseconds)'"}' \
-    && echo "SQS test successful" \
-    || echo "Warning: SQS test failed - check IAM permissions"
+# 9. Test API access
+echo "Testing Clusterra API access..."
+curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -H "X-Cluster-ID: $CLUSTER_ID" \
+    -d '{"event":"test.install","ts":"'"$(date -Iseconds)"'"}' \
+    "${API_URL}/v1/internal/events" \
+    && echo " - API test successful" \
+    || echo " - Warning: API test failed (this is normal during initial setup)"
 
-echo "=== Clusterra Hooks Installed ==="
-echo "SQS Queue: $SQS_URL"
+echo ""
+echo "=== Clusterra Hooks Installed (v2) ==="
+echo "API URL: $API_URL"
+echo "Cluster ID: $CLUSTER_ID"
+echo "Tenant ID: $TENANT_ID"

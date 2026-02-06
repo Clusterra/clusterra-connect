@@ -45,3 +45,14 @@ variable "cluster_id" {
   description = "Clusterra cluster ID (8 chars: clusa1b2)"
   type        = string
 }
+
+variable "tenant_id" {
+  description = "Clusterra tenant ID for event routing"
+  type        = string
+}
+
+variable "clusterra_api_endpoint" {
+  description = "Clusterra API endpoint for EventBridge (e.g., api.clusterra.cloud)"
+  type        = string
+  default     = "api.clusterra.cloud"
+}
