@@ -338,14 +338,7 @@ def phase_2a_connect_infra(cluster_name: str, dry_run: bool, session: boto3.Sess
 
     if not run_tofu(['apply', '-target', 'module.connectivity', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Deploying Connectivity"):
         # Rollback: Dissociate Lattice service first, then destroy
-        console.print("[yellow]⚠ Apply failed. Rolling back partial resources...[/yellow]")
-        
-        # Dissociate any service network associations (created in Phase 4)
-        service_arn = get_tofu_output('clusterra_onboarding', as_json=True) or {}
-        if lattice_arn := service_arn.get('lattice_service_arn'):
-            dissociate_lattice_service(session, lattice_arn)
-        
-        run_tofu(['destroy', '-target', 'module.connectivity', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Rolling Back Connectivity")
+        cleanup_resources(session)
         return False
         
     return True
@@ -603,6 +596,18 @@ def dissociate_lattice_service(session: boto3.Session, service_arn: str) -> bool
         console.print(f"[yellow]⚠ Dissociation warning: {e}[/yellow]")
         return False
 
+
+
+def cleanup_resources(session: boto3.Session):
+    """Cleanup connectivity resources on failure."""
+    console.print("[yellow]⚠ Installation failed. Rolling back connectivity resources...[/yellow]")
+    
+    # Dissociate any service network associations
+    service_arn_dict = get_tofu_output('clusterra_onboarding', as_json=True) or {}
+    if lattice_arn := service_arn_dict.get('lattice_service_arn'):
+        dissociate_lattice_service(session, lattice_arn)
+    
+    run_tofu(['destroy', '-target', 'module.connectivity', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Rolling Back Connectivity")
 
 def generate_sts_token(session: boto3.Session) -> str:
     """
@@ -1113,13 +1118,19 @@ def main():
         
         # Phase 2b: Configure SSM
         if not args.dry_run:
-            if not phase_2b_connect_ssm(cluster_name, session): return
+            if not phase_2b_connect_ssm(cluster_name, session):
+                cleanup_resources(session)
+                return
 
         # Phase 3: Event Hooks
-        if not phase_3_events_hooks(cluster_name, session, args.dry_run): return
+        if not phase_3_events_hooks(cluster_name, session, args.dry_run):
+            cleanup_resources(session)
+            return
         
         # Phase 4: Registration
-        if not phase_4_register(cluster_name, region, tenant_id, DEFAULT_API_URL, args.dry_run, session): return
+        if not phase_4_register(cluster_name, region, tenant_id, DEFAULT_API_URL, args.dry_run, session):
+            cleanup_resources(session)
+            return
 
         console.print(Panel("[bold green]✅ Deployment Complete![/bold green]"))
 
