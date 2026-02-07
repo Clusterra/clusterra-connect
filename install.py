@@ -325,7 +325,9 @@ def phase_2a_connect_infra(cluster_name: str, dry_run: bool, session: boto3.Sess
 
     # 2. FRONTLOAD: Attach SSM policy early (agent registers during Tofu apply)
     if not dry_run:
-        ensure_ssm_permissions(head_node_id, session)
+        if not ensure_ssm_permissions(head_node_id, session):
+            console.print("[red]❌ Failed to attach SSM policy to head node. Cannot proceed.[/red]")
+            return False
         console.print("[dim]SSM policy attached, agent registering in background...[/dim]")
 
     # 3. Update tfvars with this ID (so Tofu knows about it)
@@ -815,20 +817,25 @@ def send_ssm_command(instance_id: str, commands: list, session: boto3.Session) -
             return False, str(e)
     return False, "Max retries exceeded"
 
-def ensure_ssm_permissions(instance_id: str, session: boto3.Session):
-    """Ensure instance has AmazonSSMManagedInstanceCore policy."""
+def ensure_ssm_permissions(instance_id: str, session: boto3.Session) -> bool:
+    """Ensure instance has AmazonSSMManagedInstanceCore policy.
+    
+    Returns True if policy is attached successfully, False otherwise.
+    """
     ec2 = session.client('ec2')
     iam = session.client('iam')
     
     try:
         # Get IAM role from instance profile
         resp = ec2.describe_instances(InstanceIds=[instance_id])
-        if not resp['Reservations']: return
+        if not resp['Reservations']:
+            console.print("[red]❌ Instance not found[/red]")
+            return False
         
         instance = resp['Reservations'][0]['Instances'][0]
         if 'IamInstanceProfile' not in instance:
-            console.print("[yellow]⚠ No IAM Instance Profile found on head node. Cannot attach SSM policy.[/yellow]")
-            return
+            console.print("[red]❌ No IAM Instance Profile found on head node. Cannot attach SSM policy.[/red]")
+            return False
 
         profile_arn = instance['IamInstanceProfile']['Arn']
         profile_name = profile_arn.split('/')[-1]
@@ -836,17 +843,22 @@ def ensure_ssm_permissions(instance_id: str, session: boto3.Session):
         # Get Role from Profile
         profile_resp = iam.get_instance_profile(InstanceProfileName=profile_name)
         roles = profile_resp['InstanceProfile']['Roles']
-        if not roles: return
+        if not roles:
+            console.print("[red]❌ No roles found in instance profile[/red]")
+            return False
         
         role_name = roles[0]['RoleName']
         
         # Attach Policy
         policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-        console.print(f"[dim]Ensuring SSM policy on role {role_name}...[/dim]")
+        console.print(f"[dim]Attaching SSM policy to role {role_name}...[/dim]")
         iam.attach_role_policy(RoleName=role_name, PolicyArn=policy_arn)
+        console.print(f"[green]✓ SSM policy attached to {role_name}[/green]")
+        return True
         
     except Exception as e:
-        console.print(f"[yellow]⚠ Failed to check/attach SSM policy: {e}[/yellow]")
+        console.print(f"[red]❌ Failed to attach SSM policy: {e}[/red]")
+        return False
 
 
 def wait_for_ssm_ready(instance_id: str, session: boto3.Session, timeout: int = 30) -> bool:
