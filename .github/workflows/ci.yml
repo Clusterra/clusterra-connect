@@ -46,14 +46,6 @@ jobs:
         working-directory: modules/cluster-connect
         run: tofu validate
 
-      - name: Tofu Init (Events Module)
-        working-directory: modules/cluster-events
-        run: tofu init -backend=false
-
-      - name: Tofu Validate (Events Module)
-        working-directory: modules/cluster-events
-        run: tofu validate
-
   lint-python:
     name: Lint Python
     runs-on: ubuntu-latest
@@ -68,8 +60,8 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: Lint Lambda Handler
-        run: ruff check modules/cluster-events/lambda/ --ignore E501
+      - name: Lint Install Script
+        run: ruff check install.py --ignore E501
 
   lint-shell:
     name: Lint Shell Scripts
@@ -81,31 +73,7 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Lint Hook Scripts
-        run: shellcheck modules/cluster-events/hooks/*.sh || true
-
-  test-lambda:
-    name: Test Lambda
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        run: pip install pytest boto3
-
-      - name: Run Lambda Tests
-        working-directory: modules/cluster-events/lambda
-        run: |
-          # Create a simple test if none exists
-          if [ ! -f test_handler.py ]; then
-            echo "No tests found, skipping"
-          else
-            pytest test_handler.py -v
-          fi
+        run: shellcheck modules/cluster-connect/hooks/*.sh || true
 
   security-scan:
     name: Security Scan
