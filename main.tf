@@ -6,6 +6,11 @@ terraform {
       version = ">= 5.0"
     }
   }
+
+  # Store state and lock files in generated/ folder
+  backend "local" {
+    path = "generated/terraform.tfstate"
+  }
 }
 
 provider "aws" {
@@ -150,19 +155,8 @@ module "connectivity" {
   clusterra_service_network_id = var.clusterra_service_network_id
 }
 
-module "events" {
-  # Only deploy if cluster_id and tenant_id are set
-  count = var.cluster_id != "" && var.tenant_id != "" ? 1 : 0
-
-  source = "./modules/cluster-events"
-
-  cluster_name          = var.cluster_name
-  cluster_id            = var.cluster_id
-  tenant_id             = var.tenant_id
-  region                = var.region
-  clusterra_api_url     = var.clusterra_api_url
-  head_node_instance_id = var.head_node_instance_id
-}
+# NOTE: Events (EventBridge) are now integrated into module.connectivity
+# The old cluster-events module (SQS/Lambda) has been removed
 
 # ─────────────────────────────────────────────────────────────────────────────
 # OUTPUTS
@@ -181,14 +175,9 @@ output "clusterra_onboarding" {
   value       = module.connectivity.clusterra_onboarding
 }
 
-output "events_sqs_url" {
-  description = "SQS queue URL for Slurm hooks (set after cluster_id/tenant_id are configured)"
-  value       = var.cluster_id != "" && var.tenant_id != "" ? module.events[0].sqs_queue_url : null
-}
-
 output "install_hooks_command" {
-  description = "Run this on head node to install event hooks"
-  value       = var.cluster_id != "" && var.tenant_id != "" ? module.events[0].install_hooks_command : null
+  description = "Run this on head node to install event hooks (uses Clusterra API instead of SQS)"
+  value       = "sudo /opt/clusterra/install-hooks.sh ${var.clusterra_api_url} ${var.cluster_id} ${var.tenant_id}"
 }
 
 # VPC Lattice outputs (replaces PrivateLink outputs)

@@ -59,7 +59,7 @@ resource "aws_secretsmanager_secret" "slurm_jwt" {
   # checkov:skip=CKV_AWS_149:Default KMS key is sufficient
   name                    = "clusterra-jwt-${var.cluster_id}"
   description             = "Slurm JWT HS256 key for Clusterra authentication"
-  recovery_window_in_days = 30 # Production-safe: 30-day recovery window
+  recovery_window_in_days = 0 # Immediate deletion for dev/demo - avoids "scheduled for deletion" conflicts
 
   tags = {
     Purpose   = "Clusterra Slurm authentication"
@@ -311,9 +311,14 @@ resource "aws_vpclattice_target_group_attachment" "head_node" {
     port = var.slurm_api_port
   }
 
-  lifecycle {
-    create_before_destroy = true
+  # Timeouts to handle AWS propagation delays
+  timeouts {
+    create = "10m"
+    delete = "10m"
   }
+
+  # Note: lifecycle.replace_triggered_by cannot reference locals, only resources
+  # The attachment will be recreated via count condition when instance changes
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -340,6 +345,13 @@ resource "aws_vpclattice_listener" "slurm_api" {
     ManagedBy = "OpenTOFU"
     ClusterId = var.cluster_id
   }
+
+  # CRITICAL: Listener must depend on attachment so destroy order is:
+  # 1. Listener (removes target group reference)
+  # 2. Attachment (now safe since target group is unused)
+  # 3. Target Group
+  # This prevents the 'TargetGroupNotInUse' destroy error
+  depends_on = [aws_vpclattice_target_group_attachment.head_node]
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

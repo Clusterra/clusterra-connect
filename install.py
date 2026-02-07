@@ -194,6 +194,7 @@ def get_tofu_output(name: str, as_json: bool = False) -> str | dict | None:
         pass
     return None
 
+
 def get_pcluster_status(cluster_name: str, session: boto3.Session) -> str:
     """Get CloudFormation stack status for pcluster."""
     cfn = session.client('cloudformation')
@@ -249,6 +250,12 @@ def phase_1b_create(cluster_name: str, region: str, dry_run: bool, session: boto
     if status == 'CREATE_COMPLETE':
         console.print(f"[green]✓ Cluster '{cluster_name}' is active[/green]")
         return True
+    elif 'ROLLBACK' in status or 'FAILED' in status:
+        console.print(f"[red]❌ Cluster '{cluster_name}' is in failed state: {status}[/red]")
+        console.print(f"[yellow]Please delete the failed cluster first:[/yellow]")
+        console.print(f"[dim]  pcluster delete-cluster --cluster-name {cluster_name} --region {region}[/dim]")
+        console.print(f"[dim]Then re-run this installer.[/dim]")
+        return False
     elif status == 'NOT_FOUND':
         config_file = Path.cwd() / "generated" / f"{cluster_name}-config.yaml"
         if not config_file.exists():
@@ -330,6 +337,15 @@ def phase_2a_connect_infra(cluster_name: str, dry_run: bool, session: boto3.Sess
         return True
 
     if not run_tofu(['apply', '-target', 'module.connectivity', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Deploying Connectivity"):
+        # Rollback: Dissociate Lattice service first, then destroy
+        console.print("[yellow]⚠ Apply failed. Rolling back partial resources...[/yellow]")
+        
+        # Dissociate any service network associations (created in Phase 4)
+        service_arn = get_tofu_output('clusterra_onboarding', as_json=True) or {}
+        if lattice_arn := service_arn.get('lattice_service_arn'):
+            dissociate_lattice_service(session, lattice_arn)
+        
+        run_tofu(['destroy', '-target', 'module.connectivity', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Rolling Back Connectivity")
         return False
         
     return True
@@ -461,12 +477,27 @@ def phase_4_register(cluster_name: str, region: str, tenant_id: str, api_url: st
 
 CLUSTERRA_SERVICE_NETWORK_NAME = "clusterra-service-network"
 
-def accept_ram_invitation(session: boto3.Session) -> bool:
+def accept_ram_invitation(session: boto3.Session, service_network_id: str = "sn-0f72eeda2ea824169") -> bool:
     """Check for and accept the Clusterra service network RAM invitation.
     
-    Returns True if the invitation is accepted OR already accepted (can proceed).
+    Returns True if:
+      - We can already access the service network (RAM share accepted previously), OR
+      - The invitation was just accepted.
     Returns False if no invitation found yet (caller should retry).
     """
+    # First, check if we already have access to the service network
+    try:
+        lattice = session.client('vpc-lattice')
+        resp = lattice.get_service_network(serviceNetworkIdentifier=service_network_id)
+        if resp.get('id') == service_network_id or resp.get('arn'):
+            console.print(f"[green]✓ Service network {service_network_id} is accessible (RAM share already accepted)[/green]")
+            return True
+    except Exception as e:
+        # AccessDeniedException means we don't have access yet - that's ok, continue to check invitations
+        if 'AccessDeniedException' not in str(e):
+            console.print(f"[dim]Service network not accessible: {e}[/dim]")
+    
+    # Check for pending RAM invitations
     ram = session.client('ram')
     try:
         resp = ram.get_resource_share_invitations()
@@ -502,16 +533,16 @@ def accept_ram_invitation(session: boto3.Session) -> bool:
         return False
 
 
-def wait_for_ram_acceptance(session: boto3.Session, timeout: int = 300) -> bool:
-    """Poll for RAM invitation and accept it."""
+def wait_for_ram_acceptance(session: boto3.Session, service_network_id: str = "sn-0f72eeda2ea824169", timeout: int = 300) -> bool:
+    """Poll for RAM invitation and accept it, or confirm we already have access."""
     elapsed = 0
     interval = 10
     
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), TimeElapsedColumn(), console=console) as progress:
-        task = progress.add_task("Waiting for RAM Invitation...", total=None)
+        task = progress.add_task("Checking service network access...", total=None)
         
         while elapsed < timeout:
-            if accept_ram_invitation(session):
+            if accept_ram_invitation(session, service_network_id):
                 return True
                 
             time.sleep(interval)
@@ -541,6 +572,35 @@ def associate_lattice_service(session: boto3.Session, service_arn: str, service_
         return False
     except Exception as e:
         console.print(f"[red]❌ Association failed: {e}[/red]")
+        return False
+
+def dissociate_lattice_service(session: boto3.Session, service_arn: str) -> bool:
+    """Dissociate the Lattice Service from any service networks before destroy."""
+    lattice = session.client('vpc-lattice')
+    try:
+        # Find all associations for this service
+        resp = lattice.list_service_network_service_associations(serviceIdentifier=service_arn)
+        associations = resp.get('items', [])
+        
+        for assoc in associations:
+            assoc_id = assoc.get('id')
+            if assoc_id:
+                console.print(f"[dim]Dissociating service from network {assoc.get('serviceNetworkId')}...[/dim]")
+                lattice.delete_service_network_service_association(
+                    serviceNetworkServiceAssociationIdentifier=assoc_id
+                )
+                console.print(f"[green]✓ Dissociated {assoc_id}[/green]")
+                # Wait for dissociation to complete
+                time.sleep(5)
+        return True
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code')
+        if error_code == 'ResourceNotFoundException':
+            return True  # Already gone
+        console.print(f"[yellow]⚠ Dissociation warning: {e}[/yellow]")
+        return False
+    except Exception as e:
+        console.print(f"[yellow]⚠ Dissociation warning: {e}[/yellow]")
         return False
 
 
@@ -574,30 +634,28 @@ def generate_sts_token(session: boto3.Session) -> str:
     return base64.b64encode(json.dumps(token_data).encode()).decode()
 
 
-def phase_3a_events_infra(dry_run: bool) -> bool:
-    """Phase 3a: Events Infrastructure (Tofu)."""
-    console.print(Panel("[bold]Phase 3a: Events Infrastructure[/bold]", border_style="blue"))
+def phase_3_events_hooks(cluster_name: str, session: boto3.Session, dry_run: bool) -> bool:
+    """Phase 3: Event Hooks (SSM) - Install curl-based hooks."""
+    console.print(Panel("[bold]Phase 3: Event Hooks[/bold]", border_style="blue"))
+
+    if dry_run: return True
+
+    # Get API URL and cluster info from tfvars (not tofu output)
+    tfvars = read_tfvars()
+    api_url = tfvars.get('clusterra_api_url', 'https://api.clusterra.cloud')
+    cluster_id = tfvars.get('cluster_id', '')
+    tenant_id = tfvars.get('tenant_id', '')
     
-    if dry_run: return True
-    return run_tofu(['apply', '-target', 'module.events', '-var-file=generated/terraform.tfvars', '-auto-approve'], "Deploying Events Infra")
-
-def phase_3b_events_hooks(cluster_name: str, session: boto3.Session, dry_run: bool) -> bool:
-    """Phase 3b: Event Hooks (SSM)."""
-    console.print(Panel("[bold]Phase 3b: Event Hooks[/bold]", border_style="blue"))
-
-    if dry_run: return True
-
-    sqs_url = get_tofu_output('events_sqs_url')
-    if not sqs_url:
-        console.print("[red]❌ No SQS URL found. Did Phase 3a finish?[/red]")
-        return False
+    if not cluster_id:
+        console.print("[yellow]⚠ No cluster_id in tfvars, skipping hooks installation[/yellow]")
+        return True
         
     head_node_id = get_head_node_id(cluster_name, session)
     
-    # Check if hooks already installed? (Hard to check without logging in, just idempotent run)
-    args = [sqs_url]
+    # Pass API URL, cluster_id, tenant_id to the new curl-based hook installer
+    args = [api_url, cluster_id, tenant_id]
     
-    # Upload entire hooks directory and run install-hooks.sh
+    # Upload hooks directory and run install-hooks.sh with new arguments
     return run_ssm_script_package(head_node_id, "modules/cluster-events/hooks", "install-hooks.sh", args, session)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -613,6 +671,21 @@ def update_tfvars(updates: dict):
         for k, v in updates.items():
             if f'{k} =' not in content:
                 f.write(f'\n{k} = "{v}"')
+
+def read_tfvars() -> dict:
+    """Read terraform.tfvars and return as dict."""
+    path = Path("generated/terraform.tfvars")
+    if not path.exists(): return {}
+    
+    result = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if '=' in line and not line.startswith('#'):
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip().strip('"')
+            result[key] = value
+    return result
 
 def verify_slurmrestd(instance_id: str, session: boto3.Session) -> bool:
     """Check if port 6830 is open via SSM."""
@@ -1042,9 +1115,8 @@ def main():
         if not args.dry_run:
             if not phase_2b_connect_ssm(cluster_name, session): return
 
-        # Phase 3: Events
-        if not phase_3a_events_infra(args.dry_run): return
-        if not phase_3b_events_hooks(cluster_name, session, args.dry_run): return
+        # Phase 3: Event Hooks
+        if not phase_3_events_hooks(cluster_name, session, args.dry_run): return
         
         # Phase 4: Registration
         if not phase_4_register(cluster_name, region, tenant_id, DEFAULT_API_URL, args.dry_run, session): return

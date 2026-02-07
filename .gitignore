@@ -8,6 +8,7 @@ venv/
 
 # Terraform
 .terraform/
+.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.zip

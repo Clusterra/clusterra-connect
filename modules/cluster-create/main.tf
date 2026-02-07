@@ -98,9 +98,10 @@ data "aws_subnets" "private" {
 # ─── Secrets Manager for Slurm DB Password ─────────────────────────────────
 
 resource "random_password" "db_password" {
-  length           = 16
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
+  length  = 16
+  special = true
+  # NOTE: '#' is NOT allowed - Slurm does not support it in slurmdbd.conf
+  override_special = "!$%&*()-_=+[]{}:?"
 }
 
 resource "aws_secretsmanager_secret" "slurm_db_password" {
