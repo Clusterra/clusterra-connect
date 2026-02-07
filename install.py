@@ -834,7 +834,7 @@ def phase_3_events_hooks(
 
     # Upload hooks directory and run install-hooks.sh with new arguments
     return run_ssm_script_package(
-        head_node_id, "modules/cluster-events/hooks", "install-hooks.sh", args, session
+        head_node_id, "modules/cluster-connect/hooks", "install-hooks.sh", args, session
     )
 
 
