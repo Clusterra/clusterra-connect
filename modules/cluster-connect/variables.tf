@@ -56,9 +56,3 @@ variable "clusterra_api_endpoint" {
   type        = string
   default     = "api.clusterra.cloud"
 }
-
-variable "clusterra_event_bus_arn" {
-  description = "Clusterra EventBus ARN for cross-account event forwarding"
-  type        = string
-  default     = "arn:aws:events:ap-south-1:306847926740:event-bus/clusterra-ingest"
-}

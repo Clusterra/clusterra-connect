@@ -1,7 +1,7 @@
 #!/bin/bash
-# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra via EventBridge
+# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra API
 #
-# This script sends Slurm job events directly to Clusterra's EventBus.
+# This script sends Slurm job events directly to Clusterra API via HTTPS.
 # Runs in background (&) to avoid blocking the Slurm scheduler.
 #
 # Usage (called by Slurm prolog/epilog):
@@ -22,38 +22,39 @@ if [[ -z "${CLUSTER_ID:-}" || -z "${TENANT_ID:-}" ]]; then
     exit 0
 fi
 
-# Get EventBus ARN from environment or use default
-EVENT_BUS_ARN="${CLUSTERRA_EVENT_BUS_ARN:-arn:aws:events:ap-south-1:306847926740:event-bus/clusterra-ingest}"
+# Get API endpoint from environment or use default
+API_ENDPOINT="${CLUSTERRA_API_ENDPOINT:-api.clusterra.cloud}"
 
-# Build JSON event from Slurm environment variables
-# EventBridge expects a specific format for put-events
+# Build JSON event payload
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-DETAIL=$(cat <<EOF
+PAYLOAD=$(cat <<EOF
 {
   "cluster_id": "$CLUSTER_ID",
   "tenant_id": "$TENANT_ID",
-  "job_id": "${SLURM_JOB_ID:-}",
-  "user": "${SLURM_JOB_USER:-}",
-  "partition": "${SLURM_JOB_PARTITION:-}",
-  "node": "${SLURMD_NODENAME:-}",
-  "exit_code": "${SLURM_JOB_EXIT_CODE:-}",
-  "state": "${SLURM_JOB_STATE:-}",
-  "nodes": "${SLURM_JOB_NODELIST:-}"
+  "source": "clusterra.slurm",
+  "detail-type": "$EVENT_TYPE",
+  "time": "$TIMESTAMP",
+  "detail": {
+    "job_id": "${SLURM_JOB_ID:-}",
+    "user": "${SLURM_JOB_USER:-}",
+    "partition": "${SLURM_JOB_PARTITION:-}",
+    "node": "${SLURMD_NODENAME:-}",
+    "exit_code": "${SLURM_JOB_EXIT_CODE:-}",
+    "state": "${SLURM_JOB_STATE:-}",
+    "nodes": "${SLURM_JOB_NODELIST:-}"
+  }
 }
 EOF
 )
 
-# Fire-and-forget: aws CLI runs in background
-# Uses instance IAM role for authentication (no keys needed)
-(aws events put-events \
-  --entries "[{
-    \"Source\": \"clusterra.slurm\",
-    \"DetailType\": \"$EVENT_TYPE\",
-    \"Detail\": $(echo "$DETAIL" | jq -c . | jq -Rs .),
-    \"EventBusName\": \"$EVENT_BUS_ARN\"
-  }]" \
-  --region "${AWS_REGION:-ap-south-1}" \
-  2>/dev/null) &
+# Fire-and-forget: curl runs in background
+# No authentication needed - public API endpoint
+(curl -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Cluster-ID: $CLUSTER_ID" \
+  -d "$PAYLOAD" \
+  "https://${API_ENDPOINT}/v1/internal/events" \
+  -o /dev/null 2>/dev/null) &
 
-# Exit immediately - don't wait for aws CLI
+# Exit immediately - don't wait for curl
 exit 0
