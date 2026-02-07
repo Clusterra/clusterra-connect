@@ -49,7 +49,7 @@ CLUSTER_ID=$CLUSTER_ID
 TENANT_ID=$TENANT_ID
 CLUSTERRA_API_ENDPOINT=$API_ENDPOINT
 EOF
-sudo chmod 600 /etc/clusterra/hooks.env
+sudo chmod 644 /etc/clusterra/hooks.env
 
 # 5. Wrapper that sources env
 sudo tee "$CLUSTERRA_DIR/run-hook.sh" > /dev/null <<'WRAPPER'
