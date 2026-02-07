@@ -134,6 +134,28 @@ resource "aws_iam_role_policy_attachment" "head_node_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Allow head node to send events to Clusterra EventBus (for Slurm job hooks)
+resource "aws_iam_role_policy" "head_node_eventbridge" {
+  count = length(data.aws_iam_instance_profile.head_node) > 0 ? 1 : 0
+
+  name = "clusterra-eventbridge-${var.cluster_id}"
+  role = data.aws_iam_instance_profile.head_node[0].role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "PutEventsToClusterra"
+        Effect = "Allow"
+        Action = [
+          "events:PutEvents"
+        ]
+        Resource = var.clusterra_event_bus_arn
+      }
+    ]
+  })
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY GROUP
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,33 +533,9 @@ resource "aws_iam_role_policy" "ssm_access" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EVENTBRIDGE API DESTINATION (Node Events → Clusterra API via Lattice)
-# Replaces the old cluster-events module SQS + Lambda architecture
+# CROSS-ACCOUNT EVENTBRIDGE (Node Events → Clusterra EventBus)
+# Forwards EC2/ASG events to Clusterra's central ingest EventBus
 # ─────────────────────────────────────────────────────────────────────────────
-
-# EventBridge Connection (authentication for API Destination)
-resource "aws_cloudwatch_event_connection" "clusterra" {
-  name               = "clusterra-events-${var.cluster_id}"
-  description        = "Connection to Clusterra API for node events"
-  authorization_type = "API_KEY"
-
-  auth_parameters {
-    api_key {
-      key   = "X-Cluster-ID"
-      value = var.cluster_id
-    }
-  }
-}
-
-# EventBridge API Destination (targets Clusterra API via Lattice)
-resource "aws_cloudwatch_event_api_destination" "clusterra" {
-  name                             = "clusterra-events-${var.cluster_id}"
-  description                      = "Send node events to Clusterra API"
-  invocation_endpoint              = "https://${var.clusterra_api_endpoint}/v1/internal/events"
-  http_method                      = "POST"
-  invocation_rate_limit_per_second = 100
-  connection_arn                   = aws_cloudwatch_event_connection.clusterra.arn
-}
 
 # CloudWatch Rule for EC2/ASG events
 resource "aws_cloudwatch_event_rule" "node_events" {
@@ -561,11 +559,10 @@ resource "aws_cloudwatch_event_rule" "node_events" {
   }
 }
 
-# Target: Send events to API Destination
+# Target: Forward events to Clusterra's cross-account EventBus
 resource "aws_cloudwatch_event_target" "to_clusterra" {
-  rule = aws_cloudwatch_event_rule.node_events.name
-  arn  = aws_cloudwatch_event_api_destination.clusterra.arn
-
+  rule     = aws_cloudwatch_event_rule.node_events.name
+  arn      = var.clusterra_event_bus_arn
   role_arn = aws_iam_role.eventbridge.arn
 
   # Include cluster metadata in the event
@@ -575,21 +572,25 @@ resource "aws_cloudwatch_event_target" "to_clusterra" {
       detail_type = "$.detail-type"
       source      = "$.source"
       time        = "$.time"
+      account     = "$.account"
+      region      = "$.region"
     }
     input_template = <<EOF
 {
   "cluster_id": "${var.cluster_id}",
   "tenant_id": "${var.tenant_id}",
   "source": <source>,
-  "detail_type": <detail_type>,
+  "detail-type": <detail_type>,
   "time": <time>,
+  "account": <account>,
+  "region": <region>,
   "detail": <detail>
 }
 EOF
   }
 }
 
-# IAM Role for EventBridge to invoke API Destination
+# IAM Role for EventBridge to forward events cross-account
 resource "aws_iam_role" "eventbridge" {
   name = "clusterra-eventbridge-${var.cluster_id}"
 
@@ -609,16 +610,16 @@ resource "aws_iam_role" "eventbridge" {
   }
 }
 
-resource "aws_iam_role_policy" "eventbridge_invoke" {
-  name = "invoke-api-destination"
+resource "aws_iam_role_policy" "eventbridge_put_events" {
+  name = "put-events-cross-account"
   role = aws_iam_role.eventbridge.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["events:InvokeApiDestination"]
-      Resource = aws_cloudwatch_event_api_destination.clusterra.arn
+      Action   = ["events:PutEvents"]
+      Resource = var.clusterra_event_bus_arn
     }]
   })
 }

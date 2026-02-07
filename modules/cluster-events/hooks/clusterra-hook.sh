@@ -1,7 +1,7 @@
 #!/bin/bash
-# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra
+# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra via EventBridge
 #
-# This script replaces the old Python + SQS approach with a simple curl call.
+# This script sends Slurm job events directly to Clusterra's EventBus.
 # Runs in background (&) to avoid blocking the Slurm scheduler.
 #
 # Usage (called by Slurm prolog/epilog):
@@ -18,17 +18,20 @@ source /etc/clusterra/hooks.env 2>/dev/null || true
 EVENT_TYPE="${1:-unknown}"
 
 # Skip if not configured
-if [[ -z "${CLUSTERRA_API_URL:-}" || -z "${CLUSTER_ID:-}" ]]; then
+if [[ -z "${CLUSTER_ID:-}" || -z "${TENANT_ID:-}" ]]; then
     exit 0
 fi
 
+# Get EventBus ARN from environment or use default
+EVENT_BUS_ARN="${CLUSTERRA_EVENT_BUS_ARN:-arn:aws:events:ap-south-1:306847926740:event-bus/clusterra-ingest}"
+
 # Build JSON event from Slurm environment variables
-EVENT=$(cat <<EOF
+# EventBridge expects a specific format for put-events
+TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+DETAIL=$(cat <<EOF
 {
-  "ts": "$(date -Iseconds)",
-  "event": "$EVENT_TYPE",
   "cluster_id": "$CLUSTER_ID",
-  "tenant_id": "${TENANT_ID:-}",
+  "tenant_id": "$TENANT_ID",
   "job_id": "${SLURM_JOB_ID:-}",
   "user": "${SLURM_JOB_USER:-}",
   "partition": "${SLURM_JOB_PARTITION:-}",
@@ -40,17 +43,17 @@ EVENT=$(cat <<EOF
 EOF
 )
 
-# Fire-and-forget: curl runs in background, output suppressed
-# --max-time 5: Give up after 5 seconds (don't hang forever)
-# -s: Silent mode (no progress bar)
-# -f: Fail silently on HTTP errors (don't output error page)
-(curl -s -f --max-time 5 \
-  -X POST \
-  -H "Content-Type: application/json" \
-  -H "X-Cluster-ID: $CLUSTER_ID" \
-  -d "$EVENT" \
-  "${CLUSTERRA_API_URL}/v1/internal/events" \
+# Fire-and-forget: aws CLI runs in background
+# Uses instance IAM role for authentication (no keys needed)
+(aws events put-events \
+  --entries "[{
+    \"Source\": \"clusterra.slurm\",
+    \"DetailType\": \"$EVENT_TYPE\",
+    \"Detail\": $(echo "$DETAIL" | jq -c . | jq -Rs .),
+    \"EventBusName\": \"$EVENT_BUS_ARN\"
+  }]" \
+  --region "${AWS_REGION:-ap-south-1}" \
   2>/dev/null) &
 
-# Exit immediately - don't wait for curl
+# Exit immediately - don't wait for aws CLI
 exit 0

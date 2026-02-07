@@ -804,17 +804,22 @@ def generate_sts_token(session: boto3.Session) -> str:
 def phase_3_events_hooks(
     cluster_name: str, session: boto3.Session, dry_run: bool
 ) -> bool:
-    """Phase 3: Event Hooks (SSM) - Install curl-based hooks."""
+    """Phase 3: Event Hooks (SSM) - Install EventBridge-based hooks."""
     console.print(Panel("[bold]Phase 3: Event Hooks[/bold]", border_style="blue"))
 
     if dry_run:
         return True
 
-    # Get API URL and cluster info from tfvars (not tofu output)
+    # Get cluster info from tfvars
     tfvars = read_tfvars()
-    api_url = tfvars.get("clusterra_api_url", "https://api.clusterra.cloud")
     cluster_id = tfvars.get("cluster_id", "")
     tenant_id = tfvars.get("tenant_id", "")
+    region = tfvars.get("region", "ap-south-1")
+    # EventBus ARN (default to Clusterra's production bus)
+    event_bus_arn = tfvars.get(
+        "clusterra_event_bus_arn",
+        "arn:aws:events:ap-south-1:306847926740:event-bus/clusterra-ingest",
+    )
 
     if not cluster_id:
         console.print(
@@ -824,8 +829,8 @@ def phase_3_events_hooks(
 
     head_node_id = get_head_node_id(cluster_name, session)
 
-    # Pass API URL, cluster_id, tenant_id to the new curl-based hook installer
-    args = [api_url, cluster_id, tenant_id]
+    # Pass cluster_id, tenant_id, event_bus_arn, region to EventBridge hook installer (v3)
+    args = [cluster_id, tenant_id, event_bus_arn, region]
 
     # Upload hooks directory and run install-hooks.sh with new arguments
     return run_ssm_script_package(

@@ -4,28 +4,30 @@
 # Install Clusterra hooks on ParallelCluster head node
 # Run this on the head node after cluster creation
 #
-# Usage: install-hooks.sh <api_url> <cluster_id> <tenant_id>
+# Usage: install-hooks.sh <cluster_id> <tenant_id> [eventbus_arn] [region]
 #
-# v2: Uses curl fire-and-forget instead of SQS + Lambda
+# v3: Uses aws events put-events (cross-account EventBridge)
 
 set -e
 
-API_URL="${1:-}"
-CLUSTER_ID="${2:-}"
-TENANT_ID="${3:-}"
+CLUSTER_ID="${1:-}"
+TENANT_ID="${2:-}"
+EVENT_BUS_ARN="${3:-arn:aws:events:ap-south-1:306847926740:event-bus/clusterra-ingest}"
+AWS_REGION="${4:-ap-south-1}"
 
-if [ -z "$API_URL" ] || [ -z "$CLUSTER_ID" ]; then
-    echo "Usage: install-hooks.sh <api_url> <cluster_id> [tenant_id]"
-    echo "  api_url:    Clusterra API URL (e.g., https://api.clusterra.cloud)"
-    echo "  cluster_id: Your Clusterra cluster ID (e.g., clusa1b2)"
-    echo "  tenant_id:  Your Clusterra tenant ID (optional)"
+if [ -z "$CLUSTER_ID" ] || [ -z "$TENANT_ID" ]; then
+    echo "Usage: install-hooks.sh <cluster_id> <tenant_id> [eventbus_arn] [region]"
+    echo "  cluster_id:    Your Clusterra cluster ID (e.g., clusa1b2)"
+    echo "  tenant_id:     Your Clusterra tenant ID"
+    echo "  eventbus_arn:  Clusterra EventBus ARN (optional)"
+    echo "  region:        AWS region (default: ap-south-1)"
     exit 1
 fi
 
 CLUSTERRA_DIR="/opt/clusterra"
 SLURM_CONF="/opt/slurm/etc/slurm.conf"
 
-echo "=== Installing Clusterra Hooks (v2 - curl) ==="
+echo "=== Installing Clusterra Hooks (v3 - EventBridge) ==="
 
 # 1. Create directory
 sudo mkdir -p "$CLUSTERRA_DIR"
@@ -41,13 +43,14 @@ sudo cp "$SCRIPT_DIR/slurmctld_epilog.sh" "$CLUSTERRA_DIR/"
 # 3. Make executable
 sudo chmod +x "$CLUSTERRA_DIR"/*
 
-# 4. Create environment file (now with API_URL instead of SQS)
+# 4. Create environment file (EventBridge version)
 sudo mkdir -p /etc/clusterra
 sudo tee /etc/clusterra/hooks.env > /dev/null <<EOF
-# Clusterra Hook Configuration (v2)
-CLUSTERRA_API_URL=$API_URL
+# Clusterra Hook Configuration (v3 - EventBridge)
 CLUSTER_ID=$CLUSTER_ID
 TENANT_ID=$TENANT_ID
+CLUSTERRA_EVENT_BUS_ARN=$EVENT_BUS_ARN
+AWS_REGION=$AWS_REGION
 EOF
 sudo chmod 600 /etc/clusterra/hooks.env
 
@@ -55,13 +58,12 @@ sudo chmod 600 /etc/clusterra/hooks.env
 sudo tee "$CLUSTERRA_DIR/run-hook.sh" > /dev/null <<'WRAPPER'
 #!/bin/bash
 source /etc/clusterra/hooks.env
-export CLUSTERRA_API_URL CLUSTER_ID TENANT_ID
+export CLUSTER_ID TENANT_ID CLUSTERRA_EVENT_BUS_ARN AWS_REGION
 exec "$@"
 WRAPPER
 sudo chmod +x "$CLUSTERRA_DIR/run-hook.sh"
 
 # 6. Prefix-and-wrap: Backup existing customer hooks before installing wrappers
-#    This preserves customer's prolog.sh/epilog.sh without requiring them to rename.
 SLURM_ETC="/opt/slurm/etc"
 
 echo "Setting up hook wrappers..."
@@ -88,7 +90,7 @@ if ! grep -q "PrologSlurmctld=" "$SLURM_CONF"; then
     echo "Updating slurm.conf with Clusterra slurmctld hooks..."
     sudo tee -a "$SLURM_CONF" > /dev/null <<EOF
 
-# Clusterra Hooks (added by install-hooks.sh v2)
+# Clusterra Hooks (added by install-hooks.sh v3)
 PrologSlurmctld=$CLUSTERRA_DIR/slurmctld_prolog.sh
 EpilogSlurmctld=$CLUSTERRA_DIR/slurmctld_epilog.sh
 # Node-level hooks are at standard locations: /opt/slurm/etc/prolog.sh, epilog.sh
@@ -101,19 +103,31 @@ fi
 echo "Restarting slurmctld..."
 sudo systemctl restart slurmctld || true
 
-# 9. Test API access
-echo "Testing Clusterra API access..."
-curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-    -X POST \
-    -H "Content-Type: application/json" \
-    -H "X-Cluster-ID: $CLUSTER_ID" \
-    -d '{"event":"test.install","ts":"'"$(date -Iseconds)"'"}' \
-    "${API_URL}/v1/internal/events" \
-    && echo " - API test successful" \
-    || echo " - Warning: API test failed (this is normal during initial setup)"
+# 9. Test EventBridge access
+echo "Testing Clusterra EventBridge access..."
+TEST_RESULT=$(aws events put-events \
+    --entries "[{
+        \"Source\": \"clusterra.slurm\",
+        \"DetailType\": \"test.install\",
+        \"Detail\": \"{\\\"cluster_id\\\":\\\"$CLUSTER_ID\\\",\\\"tenant_id\\\":\\\"$TENANT_ID\\\",\\\"event\\\":\\\"hooks_installed\\\"}\",
+        \"EventBusName\": \"$EVENT_BUS_ARN\"
+    }]" \
+    --region "$AWS_REGION" 2>&1) && {
+    FAILED=$(echo "$TEST_RESULT" | jq -r '.FailedEntryCount // 0')
+    if [ "$FAILED" = "0" ]; then
+        echo " - EventBridge test successful"
+    else
+        echo " - Warning: EventBridge test failed (this is normal if IAM not yet propagated)"
+        echo "   $TEST_RESULT"
+    fi
+} || {
+    echo " - Warning: EventBridge test failed (check IAM permissions)"
+    echo "   $TEST_RESULT"
+}
 
 echo ""
-echo "=== Clusterra Hooks Installed (v2) ==="
-echo "API URL: $API_URL"
+echo "=== Clusterra Hooks Installed (v3 - EventBridge) ==="
 echo "Cluster ID: $CLUSTER_ID"
 echo "Tenant ID: $TENANT_ID"
+echo "EventBus ARN: $EVENT_BUS_ARN"
+echo "Region: $AWS_REGION"
