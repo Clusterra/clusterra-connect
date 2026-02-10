@@ -45,8 +45,14 @@ except ImportError:
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-CLUSTERRA_AWS_ACCOUNT_ID = "306847926740"
-DEFAULT_API_URL = "https://api.clusterra.cloud"
+DEFAULT_API_URL = "https://2rt2ril9qf.execute-api.ap-south-1.amazonaws.com/"  # "https://api.clusterra.cloud"
+if os.environ.get("AWS_PROFILE") == "dev":
+    DEFAULT_API_URL = "https://2rt2ril9qf.execute-api.ap-south-1.amazonaws.com/"  # "https://dev-api.clusterra.cloud"
+CLUSTERRA_SERVICE_NETWORK_ID = "sn-0052a13189d334647"  # "sn-0f72eeda2ea824169"
+CLUSTERRA_SERVICE_NETWORK_NAME = "clusterra-service-network"
+CLUSTERRA_SERVICE_ACCOUNT_ID = (
+    "493245399820"  # Prod account that owns the service network
+)
 
 console = Console()
 
@@ -110,7 +116,7 @@ def run_preflight_checks() -> bool:
         ("aws", "pip install awscli OR brew install awscli"),
         ("tofu", "brew install opentofu OR https://opentofu.org/docs/intro/install/"),
         ("node", "brew install node OR https://nodejs.org/"),
-        ("pcluster", "pip install aws-parallelcluster"),
+        # ("pcluster", "pip install aws-parallelcluster"),
     ]
 
     all_passed = True
@@ -605,11 +611,8 @@ def phase_4_register(
     return True
 
 
-CLUSTERRA_SERVICE_NETWORK_NAME = "clusterra-service-network"
-
-
 def accept_ram_invitation(
-    session: boto3.Session, service_network_id: str = "sn-0f72eeda2ea824169"
+    session: boto3.Session, service_network_id: str = CLUSTERRA_SERVICE_NETWORK_ID
 ) -> bool:
     """Check for and accept the Clusterra service network RAM invitation.
 
@@ -638,33 +641,43 @@ def accept_ram_invitation(
         resp = ram.get_resource_share_invitations()
         invites = resp.get("resourceShareInvitations", [])
 
-        # Find our specific service network invitation
+        # Find the MOST RECENT invitation matching name + sender account
+        latest_invite = None
         for invite in invites:
             name = invite.get("resourceShareName", "")
+            sender = invite.get("senderAccountId", "")
             if CLUSTERRA_SERVICE_NETWORK_NAME not in name:
-                continue  # Not our invitation
+                continue
+            if sender != CLUSTERRA_SERVICE_ACCOUNT_ID:
+                continue
+            # Keep the most recent one (by invitationTimestamp)
+            if latest_invite is None or invite.get(
+                "invitationTimestamp", ""
+            ) > latest_invite.get("invitationTimestamp", ""):
+                latest_invite = invite
 
-            status = invite.get("status")
-            arn = invite["resourceShareInvitationArn"]
-            sender = invite["senderAccountId"]
+        if not latest_invite:
+            return False
 
-            if status == "ACCEPTED":
-                console.print(
-                    f"[green]✓ RAM invitation for '{name}' already accepted[/green]"
-                )
-                return True
+        status = latest_invite.get("status")
+        arn = latest_invite["resourceShareInvitationArn"]
 
-            if status == "PENDING":
-                console.print(
-                    f"[yellow]⚡ Found RAM Invitation for '{name}' from {sender}[/yellow]"
-                )
-                console.print(f"[dim]Accepting {arn}...[/dim]")
-                ram.accept_resource_share_invitation(resourceShareInvitationArn=arn)
-                console.print("[green]✓ Accepted RAM invitation[/green]")
-                time.sleep(5)  # Allow propagation
-                return True
+        if status == "ACCEPTED":
+            console.print(
+                f"[green]✓ RAM invitation from {CLUSTERRA_SERVICE_ACCOUNT_ID} already accepted[/green]"
+            )
+            return True
 
-        # No matching invitation found
+        if status == "PENDING":
+            console.print(
+                f"[yellow]⚡ Found pending RAM invitation from {CLUSTERRA_SERVICE_ACCOUNT_ID}[/yellow]"
+            )
+            console.print(f"[dim]Accepting {arn}...[/dim]")
+            ram.accept_resource_share_invitation(resourceShareInvitationArn=arn)
+            console.print("[green]✓ Accepted RAM invitation[/green]")
+            time.sleep(5)  # Allow propagation
+            return True
+
         return False
 
     except Exception as e:
@@ -674,7 +687,7 @@ def accept_ram_invitation(
 
 def wait_for_ram_acceptance(
     session: boto3.Session,
-    service_network_id: str = "sn-0f72eeda2ea824169",
+    service_network_id: str = CLUSTERRA_SERVICE_NETWORK_ID,
     timeout: int = 300,
 ) -> bool:
     """Poll for RAM invitation and accept it, or confirm we already have access."""
@@ -690,13 +703,28 @@ def wait_for_ram_acceptance(
         task = progress.add_task("Checking service network access...", total=None)
 
         while elapsed < timeout:
-            if accept_ram_invitation(session, service_network_id):
-                return True
+            # First, check if network is ACTUALLY visible (ultimate success)
+            try:
+                lattice = session.client("vpc-lattice")
+                resp = lattice.get_service_network(
+                    serviceNetworkIdentifier=service_network_id
+                )
+                if resp.get("id") == service_network_id:
+                    console.print(
+                        f"[green]✓ Service Network {service_network_id} is visible[/green]"
+                    )
+                    return True
+            except Exception:
+                pass
+
+            # If not visible, ensure invitation is accepted
+            accept_ram_invitation(session, service_network_id)
 
             time.sleep(interval)
             elapsed += interval
             progress.update(
-                task, description=f"Waiting for RAM Invitation... ({elapsed}s)"
+                task,
+                description=f"Waiting for Service Network visibility... ({elapsed}s)",
             )
 
     return False
@@ -1442,7 +1470,8 @@ def gather_inputs(session: boto3.Session):
             if head_node_id:
                 f.write(f'head_node_instance_id = "{head_node_id}"\n')
 
-        f.write('clusterra_service_network_id = "sn-0f72eeda2ea824169"\n')
+        f.write(f'clusterra_service_network_id = "{CLUSTERRA_SERVICE_NETWORK_ID}"\n')
+        f.write(f'clusterra_account_id = "{CLUSTERRA_SERVICE_ACCOUNT_ID}"\n')
 
 
 # ─────────────────────────────────────────────────────────────────────────────

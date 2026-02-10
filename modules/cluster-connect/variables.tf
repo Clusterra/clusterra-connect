@@ -33,7 +33,7 @@ variable "head_node_instance_id" {
 variable "clusterra_account_id" {
   description = "Clusterra's AWS account ID for cross-account access"
   type        = string
-  default     = "306847926740"
+  default     = "493245399820"
 }
 
 variable "clusterra_service_network_id" {
