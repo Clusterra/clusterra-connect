@@ -45,9 +45,9 @@ except ImportError:
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_API_URL = "https://2rt2ril9qf.execute-api.ap-south-1.amazonaws.com/"  # "https://api.clusterra.cloud"
+DEFAULT_API_URL = "https://api.clusterra.cloud"
 if os.environ.get("AWS_PROFILE") == "dev":
-    DEFAULT_API_URL = "https://2rt2ril9qf.execute-api.ap-south-1.amazonaws.com/"  # "https://dev-api.clusterra.cloud"
+    DEFAULT_API_URL = "https://dev-api.clusterra.cloud"
 CLUSTERRA_SERVICE_NETWORK_ID = "sn-0052a13189d334647"  # "sn-0f72eeda2ea824169"
 CLUSTERRA_SERVICE_NETWORK_NAME = "clusterra-service-network"
 CLUSTERRA_SERVICE_ACCOUNT_ID = (
