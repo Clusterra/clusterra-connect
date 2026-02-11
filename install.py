@@ -592,6 +592,12 @@ def phase_4_register(
     first_success = resp and resp.status_code == 201
     if first_success:
         console.print("[green]✓ Cluster registered![/green]")
+    elif resp is not None:
+        # If we got a response but it wasn't 201, it's a hard failure
+        console.print(
+            f"[red]❌ Registration failed with status {resp.status_code}: {resp.text}[/red]"
+        )
+        return False
 
     # ALWAYS check for RAM invitation (blocking wait)
     # This enables the Lattice service-to-network association
