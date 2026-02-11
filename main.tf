@@ -141,6 +141,16 @@ module "parallelcluster" {
   secondary_subnet_id     = var.secondary_subnet_id
 }
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Add clusterra_account_id variable
+# ─────────────────────────────────────────────────────────────────────────────
+variable "clusterra_account_id" {
+  description = "Clusterra's AWS account ID for cross-account access"
+  type        = string
+  default     = "493245399820" # Default to Prod if not specified
+}
+
 module "connectivity" {
   source = "./modules/cluster-connect"
 
@@ -153,6 +163,7 @@ module "connectivity" {
   slurm_api_port               = var.slurm_api_port
   head_node_instance_id        = var.head_node_instance_id
   clusterra_service_network_id = var.clusterra_service_network_id
+  clusterra_account_id         = var.clusterra_account_id
 }
 
 # NOTE: Events (EventBridge) are now integrated into module.connectivity
