@@ -1,13 +1,13 @@
 #!/bin/bash
-# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra API
+# clusterra-hook.sh - Fire-and-forget event delivery to Clusterra EventBridge
 #
-# This script sends Slurm job events directly to Clusterra API via HTTPS.
+# Sends Slurm job events to the Clusterra cross-account EventBridge bus.
 # Runs in background (&) to avoid blocking the Slurm scheduler.
 #
 # Usage (called by Slurm prolog/epilog):
 #   clusterra-hook.sh <event_type>
 #
-# Event types: job.started, job.completed, job.failed, job.cancelled
+# Event types: job.allocated, job.running, job.completed, job.failed, job.cancelled
 #
 
 set -o pipefail
@@ -18,7 +18,7 @@ source /etc/clusterra/hooks.env 2>/dev/null || true
 EVENT_TYPE="${1:-unknown}"
 
 # Skip if not configured
-if [[ -z "${CLUSTER_ID:-}" || -z "${TENANT_ID:-}" ]]; then
+if [[ -z "${CLUSTER_ID:-}" || -z "${TENANT_ID:-}" || -z "${CLUSTERRA_EVENT_BUS_ARN:-}" ]]; then
     exit 0
 fi
 
@@ -26,7 +26,8 @@ fi
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Construct JSON entries for aws events put-events
-# escaping quotes for bash string
+# EventBusName targets the cross-account Clusterra event bus
+# Detail includes tenant_id and cluster_id for downstream routing
 ENTRIES=$(cat <<EOF
 [
   {
@@ -34,7 +35,8 @@ ENTRIES=$(cat <<EOF
     "Source": "clusterra.slurm",
     "Resources": [],
     "DetailType": "$EVENT_TYPE",
-    "Detail": "{\"job_id\": \"${SLURM_JOB_ID:-}\", \"user\": \"${SLURM_JOB_USER:-}\", \"partition\": \"${SLURM_JOB_PARTITION:-}\", \"node\": \"${SLURMD_NODENAME:-}\", \"exit_code\": \"${SLURM_JOB_EXIT_CODE:-}\", \"state\": \"${SLURM_JOB_STATE:-}\", \"nodes\": \"${SLURM_JOB_NODELIST:-}\"}"
+    "EventBusName": "$CLUSTERRA_EVENT_BUS_ARN",
+    "Detail": "{\"job_id\": \"${SLURM_JOB_ID:-}\", \"user\": \"${SLURM_JOB_USER:-}\", \"partition\": \"${SLURM_JOB_PARTITION:-}\", \"node\": \"${SLURMD_NODENAME:-}\", \"exit_code\": \"${SLURM_JOB_EXIT_CODE:-}\", \"state\": \"${SLURM_JOB_STATE:-}\", \"nodes\": \"${SLURM_JOB_NODELIST:-}\", \"tenant_id\": \"${TENANT_ID}\", \"cluster_id\": \"${CLUSTER_ID}\"}"
   }
 ]
 EOF

@@ -4,28 +4,30 @@
 # Install Clusterra hooks on ParallelCluster head node
 # Run this on the head node after cluster creation
 #
-# Usage: install-hooks.sh <cluster_id> <tenant_id> [api_endpoint]
+# Usage: install-hooks.sh <cluster_id> <tenant_id> <event_bus_arn> [api_endpoint]
 #
-# v4: Uses curl to Clusterra API (simpler than EventBridge)
+# v5: Uses EventBridge cross-account PutEvents for event delivery
 
 set -e
 
 CLUSTER_ID="${1:-}"
 TENANT_ID="${2:-}"
-API_ENDPOINT="${3:-api.clusterra.cloud}"
+EVENT_BUS_ARN="${3:-}"
+API_ENDPOINT="${4:-api.clusterra.cloud}"
 
-if [ -z "$CLUSTER_ID" ] || [ -z "$TENANT_ID" ]; then
-    echo "Usage: install-hooks.sh <cluster_id> <tenant_id> [api_endpoint]"
-    echo "  cluster_id:    Your Clusterra cluster ID (e.g., clusa1b2)"
-    echo "  tenant_id:     Your Clusterra tenant ID"
-    echo "  api_endpoint:  Clusterra API endpoint (default: api.clusterra.cloud)"
+if [ -z "$CLUSTER_ID" ] || [ -z "$TENANT_ID" ] || [ -z "$EVENT_BUS_ARN" ]; then
+    echo "Usage: install-hooks.sh <cluster_id> <tenant_id> <event_bus_arn> [api_endpoint]"
+    echo "  cluster_id:     Your Clusterra cluster ID (e.g., clusa1b2)"
+    echo "  tenant_id:      Your Clusterra tenant ID"
+    echo "  event_bus_arn:   Clusterra EventBridge bus ARN (cross-account)"
+    echo "  api_endpoint:    Clusterra API endpoint (default: api.clusterra.cloud)"
     exit 1
 fi
 
 CLUSTERRA_DIR="/opt/clusterra"
 SLURM_CONF="/opt/slurm/etc/slurm.conf"
 
-echo "=== Installing Clusterra Hooks (v4 - curl) ==="
+echo "=== Installing Clusterra Hooks (v5 - EventBridge) ==="
 
 # 1. Create directory
 sudo mkdir -p "$CLUSTERRA_DIR"
@@ -41,13 +43,15 @@ sudo cp "$SCRIPT_DIR/slurmctld_epilog.sh" "$CLUSTERRA_DIR/"
 # 3. Make executable
 sudo chmod +x "$CLUSTERRA_DIR"/*
 
-# 4. Create environment file (curl version)
+# 4. Create environment file
 sudo mkdir -p /etc/clusterra
 sudo tee /etc/clusterra/hooks.env > /dev/null <<EOF
-# Clusterra Hook Configuration (v4 - curl)
+# Clusterra Hook Configuration (v5 - EventBridge)
 CLUSTER_ID=$CLUSTER_ID
 TENANT_ID=$TENANT_ID
+CLUSTERRA_EVENT_BUS_ARN=$EVENT_BUS_ARN
 CLUSTERRA_API_ENDPOINT=$API_ENDPOINT
+AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "ap-south-1")
 EOF
 sudo chmod 644 /etc/clusterra/hooks.env
 
@@ -87,7 +91,7 @@ if ! grep -q "PrologSlurmctld=" "$SLURM_CONF"; then
     echo "Updating slurm.conf with Clusterra slurmctld hooks..."
     sudo tee -a "$SLURM_CONF" > /dev/null <<EOF
 
-# Clusterra Hooks (added by install-hooks.sh v4)
+# Clusterra Hooks (added by install-hooks.sh v5)
 PrologSlurmctld=$CLUSTERRA_DIR/slurmctld_prolog.sh
 EpilogSlurmctld=$CLUSTERRA_DIR/slurmctld_epilog.sh
 # Node-level hooks are at standard locations: /opt/slurm/etc/prolog.sh, epilog.sh
@@ -118,7 +122,8 @@ else
 fi
 
 echo ""
-echo "=== Clusterra Hooks Installed (v4 - curl) ==="
+echo "=== Clusterra Hooks Installed (v5 - EventBridge) ==="
 echo "Cluster ID: $CLUSTER_ID"
 echo "Tenant ID: $TENANT_ID"
+echo "Event Bus: $EVENT_BUS_ARN"
 echo "API Endpoint: $API_ENDPOINT"
