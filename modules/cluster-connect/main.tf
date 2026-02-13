@@ -93,10 +93,11 @@ data "aws_iam_instance_profile" "head_node" {
 }
 
 # Allow head node role to read JWT secret (required for slurmrestd setup)
-resource "aws_iam_role_policy" "head_node_jwt_access" {
+# Allow head node role to access Clusterra resource (JWT Secret + IoT Logs)
+resource "aws_iam_role_policy" "head_node_clusterra_access" {
   count = length(data.aws_iam_instance_profile.head_node) > 0 ? 1 : 0
 
-  name = "clusterra-jwt-access-${var.cluster_id}"
+  name = "clusterra-access-${var.cluster_id}"
   role = data.aws_iam_instance_profile.head_node[0].role_name
 
   policy = jsonencode({
@@ -117,6 +118,14 @@ resource "aws_iam_role_policy" "head_node_jwt_access" {
           "events:PutEvents"
         ]
         Resource = "*" # Allow putting events to default bus
+      },
+      {
+        Sid    = "IoTPublish"
+        Effect = "Allow"
+        Action = [
+          "iot:Publish"
+        ]
+        Resource = "arn:aws:iot:${var.clusterra_region}:${local.clusterra_account_id}:topic/clusterra/*"
       }
     ]
   })
@@ -226,7 +235,7 @@ resource "aws_ssm_association" "configure_head_node" {
   }
 
   depends_on = [
-    aws_iam_role_policy.head_node_jwt_access, # Ensure role policy is attached first
+    aws_iam_role_policy.head_node_clusterra_access, # Ensure role policy is attached first
     aws_secretsmanager_secret_version.slurm_jwt,
     aws_security_group_rule.lattice_ingress
   ]
